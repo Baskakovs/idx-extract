@@ -1,4 +1,9 @@
-"""Shared fixtures for STOXX extraction tests."""
+"""Shared fixtures for STOXX extraction tests.
+
+Security exceptions (S101, S603, S607) are inherited from the project-wide
+ruff per-file-ignores for tests/**/*.py — assert statements and subprocess
+calls are expected in test code.
+"""
 
 from __future__ import annotations
 
