@@ -33,7 +33,7 @@ class SelectionListEntry:
 
     isin: str
     review_date: date
-    ff_mcap: float
+    ff_mcap: float | None
     rank: int | None
     comment: str | None = None
 
@@ -107,18 +107,126 @@ def parse_selection_list_csv(filepath: Path) -> tuple[list[Asset], list[Selectio
         comment_val = row.get("comment")
         comment = str(comment_val).strip() if comment_val is not None and str(comment_val).strip() else None
 
-        ff_mcap_val = row["ff_mcap_meur"]
+        ff_mcap_val = row.get("ff_mcap_meur")
+        ff_mcap = float(ff_mcap_val) if ff_mcap_val is not None and str(ff_mcap_val).strip() != "" else None
         entries.append(
             SelectionListEntry(
                 isin=str(row["isin"]).strip(),
                 review_date=review_date,
-                ff_mcap=float(ff_mcap_val),
+                ff_mcap=ff_mcap,
                 rank=rank,
                 comment=comment,
             )
         )
 
     return assets, entries
+
+
+def _parse_pdf_date(text_lines: list[str]) -> date:
+    """Extract the review date from PDF header lines."""
+    for line in text_lines:
+        if "last updated" not in line.lower():
+            continue
+        match = re.search(r"(\d{8})", line)
+        if match:
+            s = match.group(1)
+            return date(int(s[:4]), int(s[4:6]), int(s[6:8]))
+        match = re.search(r"(\d{1,2})\.(\d{1,2})\.(\d{4})", line)
+        if match:
+            return date(int(match.group(3)), int(match.group(2)), int(match.group(1)))
+    msg = f"Could not find review date in PDF header: {text_lines[:5]}"
+    raise ValueError(msg)
+
+
+def parse_selection_list_pdf(filepath: Path) -> tuple[list[Asset], list[SelectionListEntry]]:
+    """Parse a STOXX selection list PDF into Assets and SelectionListEntries.
+
+    Args:
+        filepath: Path to a STOXX selection list PDF.
+
+    Returns:
+        A tuple of (assets, entries) where assets has one per unique ISIN.
+    """
+    import pdfplumber
+
+    pdf = pdfplumber.open(filepath)
+
+    # Extract review date from header text
+    header_text = pdf.pages[0].extract_text().split("\n")
+    review_date = _parse_pdf_date(header_text)
+
+    # Extract all rows across pages
+    all_rows: list[dict[str, str]] = []
+    headers: list[str] = []
+    for i, page in enumerate(pdf.pages):
+        table = page.extract_table()
+        if not table:
+            continue
+        if i == 0:
+            headers = [_normalize_column_name(h or "") for h in table[0]]
+            data = table[1:]
+        else:
+            data = table
+        for row in data:
+            if len(row) == len(headers):
+                all_rows.append(dict(zip(headers, row, strict=True)))
+
+    # Build assets: one per unique ISIN
+    seen_isins: set[str] = set()
+    assets = []
+    entries = []
+    for row in all_rows:
+        isin = str(row.get("isin", "")).strip()
+        if not isin:
+            continue
+
+        if isin not in seen_isins:
+            seen_isins.add(isin)
+            sedol_val = row.get("sedol")
+            sedol = str(sedol_val).strip() if sedol_val and str(sedol_val).strip() else None
+            assets.append(
+                Asset(
+                    isin=isin,
+                    internal_key=str(row.get("int_key", "")).strip(),
+                    ric=str(row.get("ric", "")).strip(),
+                    name=str(row.get("company_name", "")).strip(),
+                    country=str(row.get("country", "")).strip(),
+                    currency=str(row.get("currency", "")).strip(),
+                    sedol=sedol,
+                )
+            )
+
+        rank_val = row.get("rank_final")
+        rank = int(rank_val) if rank_val and str(rank_val).strip() else None
+
+        # PDF uses BEUR, convert to MEUR for consistency
+        mcap_val = row.get("ff_mcap_beur")
+        ff_mcap = float(mcap_val) * 1000 if mcap_val and str(mcap_val).strip() else None
+
+        entries.append(
+            SelectionListEntry(
+                isin=isin,
+                review_date=review_date,
+                ff_mcap=ff_mcap,
+                rank=rank,
+            )
+        )
+
+    return assets, entries
+
+
+def parse_selection_list(filepath: Path) -> tuple[list[Asset], list[SelectionListEntry]]:
+    """Parse a STOXX selection list file (CSV or PDF).
+
+    Args:
+        filepath: Path to a STOXX selection list file.
+
+    Returns:
+        A tuple of (assets, entries) where assets has one per unique ISIN.
+    """
+    if filepath.suffix.lower() == ".pdf":
+        return parse_selection_list_pdf(filepath)
+    return parse_selection_list_csv(filepath)
 
 
 def compute_membership(
@@ -137,7 +245,7 @@ def compute_membership(
     """
     # Filter to ranked entries, sort by FF Mcap DESC then ISIN ASC for deterministic tiebreaker
     ranked = [e for e in entries if e.rank is not None]
-    ranked.sort(key=lambda e: (-e.ff_mcap, e.isin))
+    ranked.sort(key=lambda e: (-(e.ff_mcap or 0), e.isin))
 
     if prior_membership is None:
         logger.warning("Bootstrap mode: no prior membership provided, taking top 600 by FF Mcap")

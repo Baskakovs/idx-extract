@@ -22,8 +22,11 @@ classifiers = [
     "Topic :: Software Development :: Build Tools",
 ]
 dependencies = [
+    "auto-mix-prep>=0.2.0",
     "httpx>=0.28,<1.0",
+    "pdfplumber>=0.11.9",
     "polars>=1.0,<2.0",
+    "pyarrow>=24.0.0",
 ]
 
 [dependency-groups]
@@ -45,6 +48,9 @@ dev = [
 Homepage = "https://github.com/jebel-quant/rhiza"
 Repository = "https://github.com/jebel-quant/rhiza"
 Issues = "https://github.com/jebel-quant/rhiza/issues"
+
+[tool.deptry.per_rule_ignores]
+DEP002 = ["auto-mix-prep", "pyarrow"]
 
 [tool.deptry.package_module_name_map]
 marimo = "marimo"

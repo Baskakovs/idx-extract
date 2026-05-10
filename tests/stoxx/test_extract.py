@@ -4,12 +4,18 @@ from __future__ import annotations
 
 import logging
 from datetime import date
+from pathlib import Path
 
-from src.stoxx.extract import (
+import pytest
+
+from stoxx.extract import (
     Asset,
     EntryReason,
     SelectionListEntry,
+    _parse_pdf_date,
     compute_membership,
+    parse_selection_list,
+    parse_selection_list_pdf,
 )
 
 
@@ -162,3 +168,140 @@ class TestIntegration:
         assert len(result) == 600
         reasons = {m.entry_reason for m in result}
         assert EntryReason.TOP_550 in reasons
+
+
+MOCK_PDF_HEADER = ["STOXX Europe 600", "Last Updated: 13.10.2015", "ISIN ..."]
+MOCK_PDF_TABLE_PAGE0 = [
+    [
+        "ISIN",
+        "Sedol",
+        "RIC",
+        "Int.Key",
+        "Company Name",
+        "Country",
+        "Currency",
+        "Component",
+        "FF Mcap (BEUR)",
+        "Rank\n(FINAL)",
+        "Rank\n(PREVIOUS\n)",
+    ],
+    ["CH0038863350", "7123870", "NESN.VX", "461669", "NESTLE", "CH", "CHF", "Large", "214.1", "1", ""],
+    ["NL0010273215", "B7DRGX5", "ASML.AS", "443333", "ASML HLDG", "NL", "EUR", "Large", "150.5", "2", "1"],
+    ["DE0007164600", "4846288", "SAP.DE", "479831", "SAP", "DE", "EUR", "Large", "120.3", "3", "2"],
+]
+MOCK_PDF_TABLE_PAGE1 = [
+    ["GB0002374006", "0237400", "DGE.L", "039600", "DIAGEO", "GB", "GBP", "Large", "80.2", "4", "3"],
+]
+
+
+def _make_mock_pdf():
+    """Create a mock pdfplumber PDF object."""
+    from unittest.mock import MagicMock
+
+    page0 = MagicMock()
+    page0.extract_text.return_value = "\n".join(MOCK_PDF_HEADER)
+    page0.extract_table.return_value = MOCK_PDF_TABLE_PAGE0
+
+    page1 = MagicMock()
+    page1.extract_text.return_value = ""
+    page1.extract_table.return_value = MOCK_PDF_TABLE_PAGE1
+
+    pdf = MagicMock()
+    pdf.pages = [page0, page1]
+    return pdf
+
+
+class TestParsePdfDate:
+    """Tests for _parse_pdf_date helper."""
+
+    def test_yyyymmdd_format(self):
+        """Parses YYYYMMDD date from header."""
+        lines = ["STOXX EUROPE 600", "Last Updated: 20230901"]
+        assert _parse_pdf_date(lines) == date(2023, 9, 1)
+
+    def test_dd_mm_yyyy_format(self):
+        """Parses DD.MM.YYYY date from header."""
+        lines = ["STOXX Europe 600", "Last Updated: 13.10.2015"]
+        assert _parse_pdf_date(lines) == date(2015, 10, 13)
+
+    def test_raises_on_missing_date(self):
+        """Raises ValueError when no date found."""
+        with pytest.raises(ValueError, match="Could not find review date"):
+            _parse_pdf_date(["STOXX Europe 600", "No date here"])
+
+
+class TestParseSelectionListPdf:
+    """Tests for parse_selection_list_pdf with mocked PDF data."""
+
+    def test_parse_returns_assets_and_entries(self, monkeypatch):
+        """PDF parsing returns correct number of assets and entries."""
+        monkeypatch.setitem(
+            __import__("sys").modules, "pdfplumber", type("M", (), {"open": staticmethod(lambda _: _make_mock_pdf())})()
+        )
+        assets, entries = parse_selection_list_pdf(Path("fake.pdf"))
+        assert len(assets) == 4
+        assert len(entries) == 4
+
+    def test_review_date_extracted(self, monkeypatch):
+        """Review date is correctly parsed from PDF header."""
+        monkeypatch.setitem(
+            __import__("sys").modules, "pdfplumber", type("M", (), {"open": staticmethod(lambda _: _make_mock_pdf())})()
+        )
+        _, entries = parse_selection_list_pdf(Path("fake.pdf"))
+        assert entries[0].review_date == date(2015, 10, 13)
+
+    def test_ff_mcap_converted_to_meur(self, monkeypatch):
+        """PDF BEUR values are converted to MEUR (multiplied by 1000)."""
+        monkeypatch.setitem(
+            __import__("sys").modules, "pdfplumber", type("M", (), {"open": staticmethod(lambda _: _make_mock_pdf())})()
+        )
+        _, entries = parse_selection_list_pdf(Path("fake.pdf"))
+        rank_1 = next(e for e in entries if e.rank == 1)
+        assert rank_1.ff_mcap == 214100.0
+
+    def test_unique_isins_in_assets(self, monkeypatch):
+        """No duplicate ISINs in assets list."""
+        monkeypatch.setitem(
+            __import__("sys").modules, "pdfplumber", type("M", (), {"open": staticmethod(lambda _: _make_mock_pdf())})()
+        )
+        assets, _ = parse_selection_list_pdf(Path("fake.pdf"))
+        isins = [a.isin for a in assets]
+        assert len(isins) == len(set(isins))
+
+    def test_asset_fields_populated(self, monkeypatch):
+        """Assets have non-empty key fields."""
+        monkeypatch.setitem(
+            __import__("sys").modules, "pdfplumber", type("M", (), {"open": staticmethod(lambda _: _make_mock_pdf())})()
+        )
+        assets, _ = parse_selection_list_pdf(Path("fake.pdf"))
+        for asset in assets:
+            assert asset.isin
+            assert asset.name
+            assert asset.country
+            assert asset.currency
+
+    def test_multi_page_extraction(self, monkeypatch):
+        """Rows from multiple pages are combined."""
+        monkeypatch.setitem(
+            __import__("sys").modules, "pdfplumber", type("M", (), {"open": staticmethod(lambda _: _make_mock_pdf())})()
+        )
+        assets, entries = parse_selection_list_pdf(Path("fake.pdf"))
+        assert any(a.isin == "GB0002374006" for a in assets)
+        assert any(e.rank == 4 for e in entries)
+
+
+class TestParseSelectionList:
+    """Tests for the unified parse_selection_list dispatcher."""
+
+    def test_dispatches_to_csv(self, csv_fixture_path):
+        """CSV files are dispatched to the CSV parser."""
+        _assets, entries = parse_selection_list(csv_fixture_path)
+        assert len(entries) == 1862
+
+    def test_dispatches_to_pdf(self, monkeypatch):
+        """PDF files are dispatched to the PDF parser."""
+        monkeypatch.setitem(
+            __import__("sys").modules, "pdfplumber", type("M", (), {"open": staticmethod(lambda _: _make_mock_pdf())})()
+        )
+        _assets, entries = parse_selection_list(Path("fake.pdf"))
+        assert len(entries) == 4

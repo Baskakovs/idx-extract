@@ -9,7 +9,7 @@ import httpx
 import pytest
 import respx
 
-from src.stoxx.download import (
+from stoxx.download import (
     build_url,
     download_file,
     download_selection_lists,
