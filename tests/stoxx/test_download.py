@@ -10,13 +10,11 @@ import pytest
 import respx
 
 from src.stoxx.download import (
-    CSV_CUTOFF,
     build_url,
     download_file,
     download_selection_lists,
     get_periods,
 )
-
 
 # --- Period generation tests ---
 

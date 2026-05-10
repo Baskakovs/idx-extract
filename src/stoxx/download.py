@@ -10,13 +10,9 @@ from pathlib import Path
 
 import httpx
 
-PDF_URL_TEMPLATE = (
-    "https://www.stoxx.com/document/Reports/SelectionList"
-    "/{year}/{month_name}/sl_{symbol}_{ym}.pdf"
-)
+PDF_URL_TEMPLATE = "https://www.stoxx.com/document/Reports/SelectionList/{year}/{month_name}/sl_{symbol}_{ym}.pdf"
 CSV_URL_TEMPLATE = (
-    "https://www.stoxx.com/document/Reports/STOXXSelectionList"
-    "/{year}/{month_name}/slpublic_{symbol}_{ymd}.csv"
+    "https://www.stoxx.com/document/Reports/STOXXSelectionList/{year}/{month_name}/slpublic_{symbol}_{ymd}.csv"
 )
 
 CSV_CUTOFF = date(2023, 12, 1)
@@ -66,15 +62,11 @@ def build_url(year: int, month: int, symbol: str, day: int = 1) -> tuple[str, st
 
     if period_date >= CSV_CUTOFF:
         ymd = f"{year}{month:02d}{day:02d}"
-        url = CSV_URL_TEMPLATE.format(
-            year=year, month_name=month_name, symbol=symbol.lower(), ymd=ymd
-        )
+        url = CSV_URL_TEMPLATE.format(year=year, month_name=month_name, symbol=symbol.lower(), ymd=ymd)
         filename = f"slpublic_{symbol}_{ymd}.csv"
     else:
         ym = f"{year}{month:02d}"
-        url = PDF_URL_TEMPLATE.format(
-            year=year, month_name=month_name, symbol=symbol.lower(), ym=ym
-        )
+        url = PDF_URL_TEMPLATE.format(year=year, month_name=month_name, symbol=symbol.lower(), ym=ym)
         filename = f"sl_{symbol}_{ym}.pdf"
 
     return url, filename
@@ -111,12 +103,7 @@ async def _download_csv_period(
 ) -> Path | None:
     """Try to download a CSV file, searching across days and subsequent months."""
     next_q = _next_quarterly_month(month)
-    # Determine the range of months to search (up to but not including the next quarter)
-    if next_q > month:
-        search_months = list(range(month, next_q))
-    else:
-        # next quarter wraps to next year (e.g. Dec -> Mar), search Dec only
-        search_months = [month]
+    search_months = list(range(month, next_q)) if next_q > month else [month]
 
     for search_month in search_months:
         days_in_month = calendar.monthrange(year, search_month)[1]
@@ -176,17 +163,13 @@ async def download_selection_lists(
         for year, month in periods:
             period_date = date(year, month, 1)
             if period_date >= CSV_CUTOFF:
-                tasks.append(
-                    _download_csv_period(client, year, month, symbol, output_dir, semaphore)
-                )
+                tasks.append(_download_csv_period(client, year, month, symbol, output_dir, semaphore))
             else:
-                tasks.append(
-                    _download_pdf_period(client, year, month, symbol, output_dir, semaphore)
-                )
+                tasks.append(_download_pdf_period(client, year, month, symbol, output_dir, semaphore))
 
         results = await asyncio.gather(*tasks)
 
-    for (year, month), filepath in zip(periods, results):
+    for (year, month), filepath in zip(periods, results, strict=True):
         if filepath:
             result.downloaded.append(filepath)
         else:
