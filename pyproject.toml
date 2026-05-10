@@ -21,7 +21,9 @@ classifiers = [
     "Intended Audience :: Developers",
     "Topic :: Software Development :: Build Tools",
 ]
-dependencies = []
+dependencies = [
+    "httpx>=0.28,<1.0",
+]
 
 [dependency-groups]
 dev = [
@@ -30,6 +32,11 @@ dev = [
     "plotly>=6.5.0,<7.0",    # Interactive visualization in notebooks (v6.5+ mature features, <7.0 for API stability)
     "pandas>=3,<3.1",        # Data manipulation for notebook examples (v3+ for modern APIs, <3.1 conservative after major release)
     "pyyaml>=6.0,<7.0",      # YAML parsing for validation scripts (v6+ for security fixes, <7.0 for API stability)
+    "respx>=0.22,<1.0",
+    "pytest>=8.0,<9.0",
+    "pytest-asyncio>=1.0,<2.0",
+    "pytest-cov>=6.0,<7.0",
+    "pytest-html>=4.0,<5.0",
     # See docs/DEPENDENCIES.md for detailed version rationale
 ]
 
@@ -44,6 +51,8 @@ numpy = "numpy"
 plotly = "plotly"
 pandas = "pandas"
 pyyaml = "yaml"
+httpx = "httpx"
+respx = "respx"
 
 [tool.ty.environment]
 python-version = "3.13"
