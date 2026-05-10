@@ -1,0 +1,19 @@
+template-repository: jebel-quant/rhiza
+
+templates:
+  - core
+  - github
+  - tests
+  - github-tests
+  - book
+  - github-book
+  - marimo
+  - github-marimo
+  - docker
+  - github-docker
+  - devcontainer
+  - github-devcontainer
+  - gitlab
+  - gh-aw
+  - renovate
+  - legal
