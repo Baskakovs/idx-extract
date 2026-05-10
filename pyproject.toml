@@ -23,6 +23,7 @@ classifiers = [
 ]
 dependencies = [
     "httpx>=0.28,<1.0",
+    "polars>=1.0,<2.0",
 ]
 
 [dependency-groups]
@@ -52,6 +53,7 @@ plotly = "plotly"
 pandas = "pandas"
 pyyaml = "yaml"
 httpx = "httpx"
+polars = "polars"
 respx = "respx"
 
 [tool.ty.environment]
