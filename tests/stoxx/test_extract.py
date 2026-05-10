@@ -4,12 +4,18 @@ from __future__ import annotations
 
 import logging
 from datetime import date
+from pathlib import Path
+
+import pytest
 
 from stoxx.extract import (
     Asset,
     EntryReason,
     SelectionListEntry,
+    _parse_pdf_date,
     compute_membership,
+    parse_selection_list,
+    parse_selection_list_pdf,
 )
 
 
@@ -162,3 +168,86 @@ class TestIntegration:
         assert len(result) == 600
         reasons = {m.entry_reason for m in result}
         assert EntryReason.TOP_550 in reasons
+
+
+PDF_FIXTURE = Path(__file__).parent.parent.parent / "cache" / "stoxx" / "sl_sxxp_201510.pdf"
+
+
+class TestParsePdfDate:
+    """Tests for _parse_pdf_date helper."""
+
+    def test_yyyymmdd_format(self):
+        """Parses YYYYMMDD date from header."""
+        lines = ["STOXX EUROPE 600", "Last Updated: 20230901"]
+        assert _parse_pdf_date(lines) == date(2023, 9, 1)
+
+    def test_dd_mm_yyyy_format(self):
+        """Parses DD.MM.YYYY date from header."""
+        lines = ["STOXX Europe 600", "Last Updated: 13.10.2015"]
+        assert _parse_pdf_date(lines) == date(2015, 10, 13)
+
+    def test_raises_on_missing_date(self):
+        """Raises ValueError when no date found."""
+        with pytest.raises(ValueError, match="Could not find review date"):
+            _parse_pdf_date(["STOXX Europe 600", "No date here"])
+
+
+@pytest.fixture(scope="module")
+def parsed_pdf():
+    """Parse the PDF fixture once for all PDF tests."""
+    if not PDF_FIXTURE.exists():
+        pytest.skip("PDF fixture not available")
+    return parse_selection_list_pdf(PDF_FIXTURE)
+
+
+@pytest.mark.skipif(not PDF_FIXTURE.exists(), reason="PDF fixture not available")
+class TestParseSelectionListPdf:
+    """Tests for parse_selection_list_pdf with real PDF fixture."""
+
+    def test_parse_returns_assets_and_entries(self, parsed_pdf):
+        """PDF parsing returns non-empty assets and entries."""
+        assets, entries = parsed_pdf
+        assert len(assets) > 600
+        assert len(entries) > 600
+
+    def test_review_date_extracted(self, parsed_pdf):
+        """Review date is correctly parsed from PDF header."""
+        _, entries = parsed_pdf
+        assert entries[0].review_date == date(2015, 10, 13)
+
+    def test_ff_mcap_converted_to_meur(self, parsed_pdf):
+        """PDF BEUR values are converted to MEUR (multiplied by 1000)."""
+        _, entries = parsed_pdf
+        rank_1 = next(e for e in entries if e.rank == 1)
+        assert rank_1.ff_mcap is not None
+        assert rank_1.ff_mcap > 100000  # Should be in MEUR range
+
+    def test_unique_isins_in_assets(self, parsed_pdf):
+        """No duplicate ISINs in assets list."""
+        assets, _ = parsed_pdf
+        isins = [a.isin for a in assets]
+        assert len(isins) == len(set(isins))
+
+    def test_asset_fields_populated(self, parsed_pdf):
+        """Assets have non-empty key fields."""
+        assets, _ = parsed_pdf
+        for asset in assets[:10]:
+            assert asset.isin
+            assert asset.name
+            assert asset.country
+            assert asset.currency
+
+
+@pytest.mark.skipif(not PDF_FIXTURE.exists(), reason="PDF fixture not available")
+class TestParseSelectionList:
+    """Tests for the unified parse_selection_list dispatcher."""
+
+    def test_dispatches_to_csv(self, csv_fixture_path):
+        """CSV files are dispatched to the CSV parser."""
+        _assets, entries = parse_selection_list(csv_fixture_path)
+        assert len(entries) == 1862
+
+    def test_dispatches_to_pdf(self, parsed_pdf):
+        """PDF files are dispatched to the PDF parser."""
+        _assets, entries = parsed_pdf
+        assert len(entries) > 600
