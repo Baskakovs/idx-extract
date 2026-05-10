@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from src.stoxx.extract import parse_selection_list_csv
+from stoxx.extract import compute_membership, parse_selection_list_csv
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures"
 
@@ -26,3 +26,10 @@ def csv_fixture_path() -> Path:
 def parsed_csv(csv_fixture_path: Path):
     """Parse the CSV fixture and return (assets, entries)."""
     return parse_selection_list_csv(csv_fixture_path)
+
+
+@pytest.fixture
+def membership(parsed_csv):
+    """Compute bootstrap membership from parsed CSV entries."""
+    _, entries = parsed_csv
+    return compute_membership(entries, prior_membership=None)

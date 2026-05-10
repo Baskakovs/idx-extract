@@ -33,7 +33,7 @@ class SelectionListEntry:
 
     isin: str
     review_date: date
-    ff_mcap: float
+    ff_mcap: float | None
     rank: int | None
     comment: str | None = None
 
@@ -107,12 +107,13 @@ def parse_selection_list_csv(filepath: Path) -> tuple[list[Asset], list[Selectio
         comment_val = row.get("comment")
         comment = str(comment_val).strip() if comment_val is not None and str(comment_val).strip() else None
 
-        ff_mcap_val = row["ff_mcap_meur"]
+        ff_mcap_val = row.get("ff_mcap_meur")
+        ff_mcap = float(ff_mcap_val) if ff_mcap_val is not None and str(ff_mcap_val).strip() != "" else None
         entries.append(
             SelectionListEntry(
                 isin=str(row["isin"]).strip(),
                 review_date=review_date,
-                ff_mcap=float(ff_mcap_val),
+                ff_mcap=ff_mcap,
                 rank=rank,
                 comment=comment,
             )
@@ -137,7 +138,7 @@ def compute_membership(
     """
     # Filter to ranked entries, sort by FF Mcap DESC then ISIN ASC for deterministic tiebreaker
     ranked = [e for e in entries if e.rank is not None]
-    ranked.sort(key=lambda e: (-e.ff_mcap, e.isin))
+    ranked.sort(key=lambda e: (-(e.ff_mcap or 0), e.isin))
 
     if prior_membership is None:
         logger.warning("Bootstrap mode: no prior membership provided, taking top 600 by FF Mcap")

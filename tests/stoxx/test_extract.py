@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from datetime import date
 
-from src.stoxx.extract import (
+from stoxx.extract import (
     Asset,
     EntryReason,
     SelectionListEntry,
