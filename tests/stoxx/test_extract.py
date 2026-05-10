@@ -170,7 +170,45 @@ class TestIntegration:
         assert EntryReason.TOP_550 in reasons
 
 
-PDF_FIXTURE = Path(__file__).parent.parent.parent / "cache" / "stoxx" / "sl_sxxp_201510.pdf"
+MOCK_PDF_HEADER = ["STOXX Europe 600", "Last Updated: 13.10.2015", "ISIN ..."]
+MOCK_PDF_TABLE_PAGE0 = [
+    [
+        "ISIN",
+        "Sedol",
+        "RIC",
+        "Int.Key",
+        "Company Name",
+        "Country",
+        "Currency",
+        "Component",
+        "FF Mcap (BEUR)",
+        "Rank\n(FINAL)",
+        "Rank\n(PREVIOUS\n)",
+    ],
+    ["CH0038863350", "7123870", "NESN.VX", "461669", "NESTLE", "CH", "CHF", "Large", "214.1", "1", ""],
+    ["NL0010273215", "B7DRGX5", "ASML.AS", "443333", "ASML HLDG", "NL", "EUR", "Large", "150.5", "2", "1"],
+    ["DE0007164600", "4846288", "SAP.DE", "479831", "SAP", "DE", "EUR", "Large", "120.3", "3", "2"],
+]
+MOCK_PDF_TABLE_PAGE1 = [
+    ["GB0002374006", "0237400", "DGE.L", "039600", "DIAGEO", "GB", "GBP", "Large", "80.2", "4", "3"],
+]
+
+
+def _make_mock_pdf():
+    """Create a mock pdfplumber PDF object."""
+    from unittest.mock import MagicMock
+
+    page0 = MagicMock()
+    page0.extract_text.return_value = "\n".join(MOCK_PDF_HEADER)
+    page0.extract_table.return_value = MOCK_PDF_TABLE_PAGE0
+
+    page1 = MagicMock()
+    page1.extract_text.return_value = ""
+    page1.extract_table.return_value = MOCK_PDF_TABLE_PAGE1
+
+    pdf = MagicMock()
+    pdf.pages = [page0, page1]
+    return pdf
 
 
 class TestParsePdfDate:
@@ -192,53 +230,66 @@ class TestParsePdfDate:
             _parse_pdf_date(["STOXX Europe 600", "No date here"])
 
 
-@pytest.fixture(scope="module")
-def parsed_pdf():
-    """Parse the PDF fixture once for all PDF tests."""
-    if not PDF_FIXTURE.exists():
-        pytest.skip("PDF fixture not available")
-    return parse_selection_list_pdf(PDF_FIXTURE)
-
-
-@pytest.mark.skipif(not PDF_FIXTURE.exists(), reason="PDF fixture not available")
 class TestParseSelectionListPdf:
-    """Tests for parse_selection_list_pdf with real PDF fixture."""
+    """Tests for parse_selection_list_pdf with mocked PDF data."""
 
-    def test_parse_returns_assets_and_entries(self, parsed_pdf):
-        """PDF parsing returns non-empty assets and entries."""
-        assets, entries = parsed_pdf
-        assert len(assets) > 600
-        assert len(entries) > 600
+    def test_parse_returns_assets_and_entries(self, monkeypatch):
+        """PDF parsing returns correct number of assets and entries."""
+        monkeypatch.setitem(
+            __import__("sys").modules, "pdfplumber", type("M", (), {"open": staticmethod(lambda _: _make_mock_pdf())})()
+        )
+        assets, entries = parse_selection_list_pdf(Path("fake.pdf"))
+        assert len(assets) == 4
+        assert len(entries) == 4
 
-    def test_review_date_extracted(self, parsed_pdf):
+    def test_review_date_extracted(self, monkeypatch):
         """Review date is correctly parsed from PDF header."""
-        _, entries = parsed_pdf
+        monkeypatch.setitem(
+            __import__("sys").modules, "pdfplumber", type("M", (), {"open": staticmethod(lambda _: _make_mock_pdf())})()
+        )
+        _, entries = parse_selection_list_pdf(Path("fake.pdf"))
         assert entries[0].review_date == date(2015, 10, 13)
 
-    def test_ff_mcap_converted_to_meur(self, parsed_pdf):
+    def test_ff_mcap_converted_to_meur(self, monkeypatch):
         """PDF BEUR values are converted to MEUR (multiplied by 1000)."""
-        _, entries = parsed_pdf
+        monkeypatch.setitem(
+            __import__("sys").modules, "pdfplumber", type("M", (), {"open": staticmethod(lambda _: _make_mock_pdf())})()
+        )
+        _, entries = parse_selection_list_pdf(Path("fake.pdf"))
         rank_1 = next(e for e in entries if e.rank == 1)
-        assert rank_1.ff_mcap is not None
-        assert rank_1.ff_mcap > 100000  # Should be in MEUR range
+        assert rank_1.ff_mcap == 214100.0
 
-    def test_unique_isins_in_assets(self, parsed_pdf):
+    def test_unique_isins_in_assets(self, monkeypatch):
         """No duplicate ISINs in assets list."""
-        assets, _ = parsed_pdf
+        monkeypatch.setitem(
+            __import__("sys").modules, "pdfplumber", type("M", (), {"open": staticmethod(lambda _: _make_mock_pdf())})()
+        )
+        assets, _ = parse_selection_list_pdf(Path("fake.pdf"))
         isins = [a.isin for a in assets]
         assert len(isins) == len(set(isins))
 
-    def test_asset_fields_populated(self, parsed_pdf):
+    def test_asset_fields_populated(self, monkeypatch):
         """Assets have non-empty key fields."""
-        assets, _ = parsed_pdf
-        for asset in assets[:10]:
+        monkeypatch.setitem(
+            __import__("sys").modules, "pdfplumber", type("M", (), {"open": staticmethod(lambda _: _make_mock_pdf())})()
+        )
+        assets, _ = parse_selection_list_pdf(Path("fake.pdf"))
+        for asset in assets:
             assert asset.isin
             assert asset.name
             assert asset.country
             assert asset.currency
 
+    def test_multi_page_extraction(self, monkeypatch):
+        """Rows from multiple pages are combined."""
+        monkeypatch.setitem(
+            __import__("sys").modules, "pdfplumber", type("M", (), {"open": staticmethod(lambda _: _make_mock_pdf())})()
+        )
+        assets, entries = parse_selection_list_pdf(Path("fake.pdf"))
+        assert any(a.isin == "GB0002374006" for a in assets)
+        assert any(e.rank == 4 for e in entries)
 
-@pytest.mark.skipif(not PDF_FIXTURE.exists(), reason="PDF fixture not available")
+
 class TestParseSelectionList:
     """Tests for the unified parse_selection_list dispatcher."""
 
@@ -247,7 +298,10 @@ class TestParseSelectionList:
         _assets, entries = parse_selection_list(csv_fixture_path)
         assert len(entries) == 1862
 
-    def test_dispatches_to_pdf(self, parsed_pdf):
+    def test_dispatches_to_pdf(self, monkeypatch):
         """PDF files are dispatched to the PDF parser."""
-        _assets, entries = parsed_pdf
-        assert len(entries) > 600
+        monkeypatch.setitem(
+            __import__("sys").modules, "pdfplumber", type("M", (), {"open": staticmethod(lambda _: _make_mock_pdf())})()
+        )
+        _assets, entries = parse_selection_list(Path("fake.pdf"))
+        assert len(entries) == 4
