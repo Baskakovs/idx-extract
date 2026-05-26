@@ -152,6 +152,19 @@ class TestComputeMembership:
 class TestIntegration:
     """Integration tests using real CSV fixture."""
 
+    def test_every_cycle_has_at_least_600_with_ranks_1_to_600(self, parsed_csv):
+        """Every review cycle must have at least 600 entries covering ranks 1-600."""
+        _, entries = parsed_csv
+        by_date: dict[date, list[SelectionListEntry]] = {}
+        for e in entries:
+            by_date.setdefault(e.review_date, []).append(e)
+        for review_date, cycle_entries in by_date.items():
+            assert len(cycle_entries) >= 600, f"{review_date}: only {len(cycle_entries)} entries"
+            ranks = {e.rank for e in cycle_entries if e.rank is not None}
+            expected = set(range(1, 601))
+            missing = expected - ranks
+            assert not missing, f"{review_date}: missing ranks {sorted(missing)}"
+
     def test_full_pipeline_bootstrap(self, parsed_csv):
         """Parse real CSV -> bootstrap membership -> exactly 600."""
         _, entries = parsed_csv

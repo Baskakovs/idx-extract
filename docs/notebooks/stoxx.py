@@ -113,8 +113,8 @@ def cell_07():
 
 @app.cell
 def cell_07b(selected_index):
-    """Show assets as an interactive table."""
-    mo.ui.table(selected_index.assets.to_pandas())
+    """Display asset metadata for the selected index."""
+    selected_index.assets
     return
 
 
@@ -232,6 +232,16 @@ def cell_12(date_dropdown, px, selected_index):
     else:
         _output = mo.callout(mo.md("FF Market Cap data is not available for this review date."), kind="warn")
     _output
+    return
+
+
+@app.cell
+def _():
+    """Load precomputed rank data if available."""
+    try:
+        pl.read_parquet("data/stoxx600_ranks.parquet")
+    except FileNotFoundError:
+        pl.DataFrame()
     return
 
 

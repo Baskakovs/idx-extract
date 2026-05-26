@@ -139,6 +139,7 @@ async def download_selection_lists(
     end: date | None = None,
     output_dir: Path | str = "cache/stoxx",
     symbol: str = DEFAULT_SYMBOL,
+    periods: list[tuple[int, int]] | None = None,
 ) -> DownloadResult:
     """Download STOXX selection list files for the given date range.
 
@@ -147,6 +148,8 @@ async def download_selection_lists(
         end: End date (inclusive). Defaults to today.
         output_dir: Directory for downloaded files.
         symbol: Index symbol (default: sxxp for STOXX Europe 600).
+        periods: Explicit list of (year, month) tuples to download.
+            When provided, start/end are ignored.
 
     Returns:
         DownloadResult with lists of downloaded file paths and missed periods.
@@ -154,7 +157,8 @@ async def download_selection_lists(
     if end is None:
         end = date.today()
     output_dir = Path(output_dir)
-    periods = get_periods(start, end)
+    if periods is None:
+        periods = get_periods(start, end)
     result = DownloadResult()
     semaphore = asyncio.Semaphore(10)
 
