@@ -237,7 +237,11 @@ def cell_12(date_dropdown, px, selected_index):
 
 @app.cell
 def _():
-    pl.read_parquet("data/stoxx600_ranks.parquet")
+    """Load precomputed rank data if available."""
+    try:
+        pl.read_parquet("data/stoxx600_ranks.parquet")
+    except FileNotFoundError:
+        pl.DataFrame()
     return
 
 
