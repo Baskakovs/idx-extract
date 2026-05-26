@@ -94,7 +94,7 @@ class R2Storage(Storage):
             if not file_path.is_file():
                 continue
             relative = file_path.relative_to(local_dir)
-            key = f"{prefix}/{relative}" if prefix else str(relative)
+            key = f"{prefix}/{relative.as_posix()}" if prefix else relative.as_posix()
             with file_path.open("rb") as f:
                 self._client.put_object(Bucket=self._bucket_name, Key=key, Body=f.read())
             count += 1
