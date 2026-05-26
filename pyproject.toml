@@ -23,6 +23,7 @@ classifiers = [
 ]
 dependencies = [
     "auto-mix-prep>=0.2.0",
+    "boto3>=1.35,<2.0",
     "httpx>=0.28,<1.0",
     "pdfplumber>=0.11.9",
     "polars>=1.0,<2.0",
@@ -53,6 +54,7 @@ Issues = "https://github.com/jebel-quant/rhiza/issues"
 DEP002 = ["auto-mix-prep", "pyarrow"]
 
 [tool.deptry.package_module_name_map]
+boto3 = "boto3"
 marimo = "marimo"
 numpy = "numpy"
 plotly = "plotly"
