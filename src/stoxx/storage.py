@@ -90,7 +90,7 @@ class R2Storage(Storage):
     def upload_directory(self, local_dir: Path, prefix: str) -> int:
         """Upload all files in a local directory tree to R2."""
         count = 0
-        for file_path in local_dir.rglob("*"):
+        for file_path in sorted(local_dir.rglob("*")):
             if not file_path.is_file():
                 continue
             relative = file_path.relative_to(local_dir)
