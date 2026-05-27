@@ -3,10 +3,13 @@
 import asyncio
 import sys
 
-from .sync import sync
+from stoxx.sync import sync
 
 if __name__ == "__main__":
     if "--serve" in sys.argv:
-        sync.serve(name="deployment-idx-extract")
+        sync.from_source(
+            source="https://github.com/Baskakovs/idx-extract.git",
+            entrypoint="prefect_entrypoint.py:sync",
+        ).serve(name="deployment-idx-extract")
     else:
         asyncio.run(sync())

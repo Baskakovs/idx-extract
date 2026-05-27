@@ -12,7 +12,7 @@ from typing import Any
 import polars as pl
 from prefect import get_run_logger, task
 
-from .extract import Asset, IndexMembership, SelectionListEntry
+from stoxx.extract import Asset, IndexMembership, SelectionListEntry
 
 logger = logging.getLogger(__name__)
 

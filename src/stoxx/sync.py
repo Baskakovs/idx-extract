@@ -1,7 +1,5 @@
 """Incremental sync orchestrator for STOXX 600 data."""
 
-from __future__ import annotations
-
 import logging
 import tempfile
 from datetime import date
@@ -10,10 +8,10 @@ from pathlib import Path
 import polars as pl
 from prefect import flow, get_run_logger, task
 
-from .download import START_DATE, download_selection_lists, get_periods
-from .extract import Asset, compute_membership, parse_selection_list
-from .load import _dataclasses_to_df, _write_atomic, write_parquet_dataset
-from .storage import Storage, from_env
+from stoxx.download import START_DATE, download_selection_lists, get_periods
+from stoxx.extract import Asset, compute_membership, parse_selection_list
+from stoxx.load import _dataclasses_to_df, _write_atomic, write_parquet_dataset
+from stoxx.storage import Storage, from_env
 
 logger = logging.getLogger(__name__)
 
