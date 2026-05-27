@@ -188,7 +188,10 @@ class TestSync:
         storage = MemoryStorage()
 
         # Pre-populate storage with all periods up to a known date
-        with patch("stoxx.sync.date") as mock_date:
+        with (
+            patch("stoxx.sync.from_env", return_value=storage),
+            patch("stoxx.sync.date") as mock_date,
+        ):
             mock_date.today.return_value = date(2024, 3, 15)
             mock_date.side_effect = lambda *a, **kw: date(*a, **kw)
 
@@ -200,7 +203,7 @@ class TestSync:
                 key = f"STOXX600/membership/review_date={date(year, month, 1)}/data.parquet"
                 storage._objects[key] = b"fake"
 
-            result = await sync(storage, output_dir=tmp_path / "output", cache_dir=tmp_path / "cache")
+            result = await sync(output_dir=tmp_path / "output", cache_dir=tmp_path / "cache")
 
         assert result == []
 
@@ -217,7 +220,6 @@ class TestSync:
 
         async def mock_download(**kwargs):
             result = DownloadResult()
-            # Write a file that parse_selection_list can't use, so we mock parsing too
             csv_path = cache_dir / "test.csv"
             csv_path.parent.mkdir(parents=True, exist_ok=True)
             csv_path.write_text("placeholder")
@@ -225,14 +227,14 @@ class TestSync:
             return result
 
         with (
+            patch("stoxx.sync.from_env", return_value=storage),
             patch("stoxx.sync.get_periods", return_value=[(2024, 3)]),
             patch("stoxx.sync.download_selection_lists", side_effect=mock_download),
             patch("stoxx.sync.parse_selection_list", return_value=(assets, entries)),
         ):
-            result = await sync(storage, output_dir=output_dir, cache_dir=cache_dir)
+            result = await sync(output_dir=output_dir, cache_dir=cache_dir)
 
         assert result == [rd]
-        # Verify files were uploaded to storage
         assert any("membership" in k for k in storage._objects)
 
     @pytest.mark.asyncio
@@ -255,6 +257,7 @@ class TestSync:
             return result
 
         with (
+            patch("stoxx.sync.from_env", return_value=storage),
             patch("stoxx.sync.get_periods", return_value=[(2024, 3)]),
             patch("stoxx.sync.download_selection_lists", side_effect=mock_download),
             patch("stoxx.sync.parse_selection_list", return_value=(assets, entries)),
@@ -264,14 +267,13 @@ class TestSync:
                 IndexMembership(isin=f"ISIN{i:06d}", is_member=True, entry_reason=EntryReason.BOOTSTRAP)
                 for i in range(600)
             ]
-            result = await sync(storage, output_dir=output_dir, cache_dir=cache_dir)
+            result = await sync(output_dir=output_dir, cache_dir=cache_dir)
 
-        # compute_membership should be called with prior_membership=None
         mock_compute.assert_called_once()
         _, kwargs = mock_compute.call_args
         if not kwargs:
             args = mock_compute.call_args[0]
-            assert args[1] is None  # prior_membership
+            assert args[1] is None
         assert result == [rd]
 
     @pytest.mark.asyncio
@@ -310,17 +312,16 @@ class TestSync:
             ]
 
         with (
+            patch("stoxx.sync.from_env", return_value=storage),
             patch("stoxx.sync.get_periods", return_value=[(2024, 3), (2024, 6)]),
             patch("stoxx.sync.download_selection_lists", side_effect=mock_download),
             patch("stoxx.sync.parse_selection_list", side_effect=mock_parse),
             patch("stoxx.sync.compute_membership", side_effect=mock_compute),
         ):
-            result = await sync(storage, output_dir=output_dir, cache_dir=cache_dir)
+            result = await sync(output_dir=output_dir, cache_dir=cache_dir)
 
         assert result == [rd1, rd2]
-        # First call should have no prior (bootstrap)
         assert compute_calls[0] is None
-        # Second call should have prior membership from first
         assert compute_calls[1] is not None
         assert isinstance(compute_calls[1], set)
 
@@ -344,11 +345,12 @@ class TestSync:
             return result
 
         with (
+            patch("stoxx.sync.from_env", return_value=storage),
             patch("stoxx.sync.get_periods", return_value=[(2024, 3)]),
             patch("stoxx.sync.download_selection_lists", side_effect=mock_download),
             patch("stoxx.sync.parse_selection_list", return_value=(assets, entries)),
         ):
-            result = await sync(storage, output_dir=output_dir, cache_dir=cache_dir)
+            result = await sync(output_dir=output_dir, cache_dir=cache_dir)
 
         assert len(result) == 1
         assert result[0] == rd
@@ -379,7 +381,6 @@ class TestSync:
         entries = _make_entries(rd)
 
         async def mock_download(**kwargs):
-            # Verify only the missing period is requested
             periods = kwargs.get("periods", [])
             assert (2024, 3) not in periods
             result = DownloadResult()
@@ -390,11 +391,12 @@ class TestSync:
             return result
 
         with (
+            patch("stoxx.sync.from_env", return_value=storage),
             patch("stoxx.sync.get_periods", return_value=[(2024, 3), (2024, 6)]),
             patch("stoxx.sync.download_selection_lists", side_effect=mock_download),
             patch("stoxx.sync.parse_selection_list", return_value=(assets, entries)),
         ):
-            result = await sync(storage, output_dir=output_dir, cache_dir=cache_dir)
+            result = await sync(output_dir=output_dir, cache_dir=cache_dir)
 
         assert result == [rd]
 

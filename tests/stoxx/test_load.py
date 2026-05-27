@@ -57,12 +57,12 @@ class TestWriteParquetDataset:
 
         assert df1.equals(df2)
 
-    def test_partition_overwrite_logs_warning(self, tmp_path, parsed_csv, membership, caplog):
-        """Writing the same review_date twice logs a warning."""
+    def test_partition_overwrite_logs_debug(self, tmp_path, parsed_csv, membership, caplog):
+        """Writing the same review_date twice logs a debug message."""
         assets, entries = parsed_csv
         write_parquet_dataset(assets, entries, membership, tmp_path)
 
-        with caplog.at_level(logging.WARNING):
+        with caplog.at_level(logging.DEBUG):
             write_parquet_dataset(assets, entries, membership, tmp_path)
 
         assert any("already exists" in msg for msg in caplog.messages)

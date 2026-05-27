@@ -55,7 +55,7 @@ uv run pytest tests/stoxx/test_storage.py::TestListReviewDates -v
 
 ## Sync Schedule
 
-The sync pipeline runs automatically via GitHub Actions on the 1st and 15th of each month. See [`.github/workflows/stoxx-sync.yml`](.github/workflows/stoxx-sync.yml) for configuration.
+The sync pipeline is orchestrated via [Prefect](https://www.prefect.io/). Deploy and run with `uv run python -m stoxx`.
 
 ## Environment Variables
 

@@ -10,6 +10,7 @@ from datetime import date
 from pathlib import Path
 
 import polars as pl
+from prefect import task
 
 logger = logging.getLogger(__name__)
 
@@ -215,6 +216,7 @@ def parse_selection_list_pdf(filepath: Path) -> tuple[list[Asset], list[Selectio
     return assets, entries
 
 
+@task
 def parse_selection_list(filepath: Path) -> tuple[list[Asset], list[SelectionListEntry]]:
     """Parse a STOXX selection list file (CSV or PDF).
 
@@ -224,11 +226,19 @@ def parse_selection_list(filepath: Path) -> tuple[list[Asset], list[SelectionLis
     Returns:
         A tuple of (assets, entries) where assets has one per unique ISIN.
     """
-    if filepath.suffix.lower() == ".pdf":
-        return parse_selection_list_pdf(filepath)
-    return parse_selection_list_csv(filepath)
+    file_type = filepath.suffix.lower().lstrip(".")
+    if file_type == "pdf":
+        assets, entries = parse_selection_list_pdf(filepath)
+    else:
+        assets, entries = parse_selection_list_csv(filepath)
+    review_date = entries[0].review_date if entries else "unknown"
+    logger.info(
+        "Parsed %s file for %s: %d assets, %d entries", file_type.upper(), review_date, len(assets), len(entries)
+    )
+    return assets, entries
 
 
+@task
 def compute_membership(
     entries: list[SelectionListEntry],
     prior_membership: set[str] | None,

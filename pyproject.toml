@@ -27,6 +27,7 @@ dependencies = [
     "httpx>=0.28,<1.0",
     "pdfplumber>=0.11.9",
     "polars>=1.0,<2.0",
+    "prefect>=3.7.2",
     "pyarrow>=24.0.0",
 ]
 
