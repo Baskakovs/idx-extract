@@ -1,12 +1,12 @@
 """Entry point for `python -m stoxx`."""
 
 import asyncio
-import logging
+import sys
 
-from .storage import from_env
 from .sync import sync
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    _storage = from_env()
-    asyncio.run(sync(_storage))
+    if "--serve" in sys.argv:
+        sync.serve(name="deployment-idx-extract")
+    else:
+        asyncio.run(sync())

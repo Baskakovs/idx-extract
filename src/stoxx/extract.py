@@ -10,6 +10,7 @@ from datetime import date
 from pathlib import Path
 
 import polars as pl
+from prefect import get_run_logger, task
 
 logger = logging.getLogger(__name__)
 
@@ -215,6 +216,7 @@ def parse_selection_list_pdf(filepath: Path) -> tuple[list[Asset], list[Selectio
     return assets, entries
 
 
+@task
 def parse_selection_list(filepath: Path) -> tuple[list[Asset], list[SelectionListEntry]]:
     """Parse a STOXX selection list file (CSV or PDF).
 
@@ -224,11 +226,18 @@ def parse_selection_list(filepath: Path) -> tuple[list[Asset], list[SelectionLis
     Returns:
         A tuple of (assets, entries) where assets has one per unique ISIN.
     """
-    if filepath.suffix.lower() == ".pdf":
-        return parse_selection_list_pdf(filepath)
-    return parse_selection_list_csv(filepath)
+    log = get_run_logger()
+    file_type = filepath.suffix.lower().lstrip(".")
+    if file_type == "pdf":
+        assets, entries = parse_selection_list_pdf(filepath)
+    else:
+        assets, entries = parse_selection_list_csv(filepath)
+    review_date = entries[0].review_date if entries else "unknown"
+    log.info("Parsed %s file for %s: %d assets, %d entries", file_type.upper(), review_date, len(assets), len(entries))
+    return assets, entries
 
 
+@task
 def compute_membership(
     entries: list[SelectionListEntry],
     prior_membership: set[str] | None,
@@ -248,7 +257,7 @@ def compute_membership(
     ranked.sort(key=lambda e: (-(e.ff_mcap or 0), e.isin))
 
     if prior_membership is None:
-        logger.warning("Bootstrap mode: no prior membership provided, taking top 600 by FF Mcap")
+        get_run_logger().warning("Bootstrap mode: no prior membership provided, taking top 600 by FF Mcap")
         return [IndexMembership(isin=e.isin, is_member=True, entry_reason=EntryReason.BOOTSTRAP) for e in ranked[:600]]
 
     members: list[IndexMembership] = []

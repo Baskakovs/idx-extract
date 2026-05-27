@@ -2,18 +2,18 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import tempfile
 from datetime import date
 from pathlib import Path
 
 import polars as pl
+from prefect import flow, get_run_logger, task
 
 from .download import START_DATE, download_selection_lists, get_periods
 from .extract import Asset, compute_membership, parse_selection_list
 from .load import _dataclasses_to_df, _write_atomic, write_parquet_dataset
-from .storage import Storage
+from .storage import Storage, from_env
 
 logger = logging.getLogger(__name__)
 
@@ -126,6 +126,7 @@ def _build_isin_membership(output_dir: Path) -> tuple[dict[str, list[date]], lis
     return isin_dates, sorted_dates
 
 
+@task
 def _write_merged_assets(output_dir: Path, new_assets: list[Asset], member_isins: set[str]) -> None:
     """Build assets.parquet with membership interval columns from all partitions.
 
@@ -157,10 +158,12 @@ def _write_merged_assets(output_dir: Path, new_assets: list[Asset], member_isins
     # Build intervals from all membership partitions on disk
     isin_dates, all_dates = _build_isin_membership(output_dir)
 
+    log = get_run_logger()
+
     if not all_dates:
         # No membership data yet — write metadata without intervals
         _write_atomic(metadata_df, assets_path)
-        logger.info("Wrote %d assets (no membership data for intervals)", len(metadata_df))
+        log.info("Wrote %d assets (no membership data for intervals)", len(metadata_df))
         return
 
     # Build interval rows
@@ -171,7 +174,7 @@ def _write_merged_assets(output_dir: Path, new_assets: list[Asset], member_isins
 
     if not rows:
         _write_atomic(metadata_df, assets_path)
-        logger.info("Wrote %d assets (no member intervals found)", len(metadata_df))
+        log.info("Wrote %d assets (no member intervals found)", len(metadata_df))
         return
 
     intervals_df = pl.DataFrame(rows).with_columns(
@@ -183,24 +186,25 @@ def _write_merged_assets(output_dir: Path, new_assets: list[Asset], member_isins
     combined = intervals_df.join(metadata_df, on="isin", how="left")
 
     _write_atomic(combined, assets_path)
-    logger.info("Wrote %d asset rows (%d unique ISINs)", len(combined), combined["isin"].n_unique())
+    log.info("Wrote %d asset rows (%d unique ISINs)", len(combined), combined["isin"].n_unique())
 
 
+@flow(log_prints=True)
 async def sync(
-    storage: Storage,
     output_dir: Path | str = "output/STOXX600",
     cache_dir: Path | str = "cache/stoxx",
 ) -> list[date]:
     """Run incremental sync: download missing periods, compute membership, upload.
 
     Args:
-        storage: Storage backend for listing/uploading data.
         output_dir: Local directory for Parquet output.
         cache_dir: Local directory for downloaded selection list files.
 
     Returns:
         List of newly processed review dates.
     """
+    log = get_run_logger()
+    storage = from_env()
     output_dir = Path(output_dir)
     cache_dir = Path(cache_dir)
     today = date.today()
@@ -212,16 +216,18 @@ async def sync(
     missing_periods = [(y, m) for y, m in all_periods if (y, m) not in remote_months]
 
     if not missing_periods:
-        logger.info("All periods already synced, nothing to do.")
+        log.info("All periods already synced, nothing to do.")
         return []
 
-    logger.info("Found %d missing periods to process", len(missing_periods))
+    log.info("Found %d missing periods to process", len(missing_periods))
 
     result = await download_selection_lists(output_dir=cache_dir, periods=missing_periods)
 
     if not result.downloaded:
-        logger.warning("No files downloaded for missing periods")
+        log.warning("No files downloaded for missing periods")
         return []
+
+    log.info("Downloaded %d files", len(result.downloaded))
 
     # Parse all downloaded files and group by review_date
     review_date_groups: dict[date, tuple[list, list]] = {}
@@ -235,6 +241,8 @@ async def sync(
                 existing_entries.extend(entries)
             else:
                 review_date_groups[rd] = (assets, entries)
+
+    log.info("Parsed %d review dates", len(review_date_groups))
 
     sorted_dates = sorted(review_date_groups.keys())
     new_dates: list[date] = []
@@ -265,7 +273,7 @@ async def sync(
             all_member_isins.update(m.isin for m in membership if m.is_member)
 
             new_dates.append(rd)
-            logger.info("Processed review date %s", rd)
+            log.info("Processed review date %s", rd)
 
     # Merge new assets with existing assets.parquet, keeping only members
     _write_merged_assets(output_dir, all_assets, all_member_isins)
@@ -274,13 +282,5 @@ async def sync(
     if new_dates:
         storage.upload_directory(output_dir, "STOXX600")
 
-    logger.info("Sync complete: %d new dates processed", len(new_dates))
+    log.info("Sync complete: %d new dates processed", len(new_dates))
     return new_dates
-
-
-if __name__ == "__main__":
-    from .storage import from_env
-
-    logging.basicConfig(level=logging.INFO)
-    _storage = from_env()
-    asyncio.run(sync(_storage))

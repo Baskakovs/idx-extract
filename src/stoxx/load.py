@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import polars as pl
+from prefect import get_run_logger, task
 
 from .extract import Asset, IndexMembership, SelectionListEntry
 
@@ -44,12 +45,13 @@ def _write_partitioned(df: pl.DataFrame, base_dir: Path, partition_col: str) -> 
         partition_value = str(value)
         partition_dir = base_dir / f"{partition_col}={partition_value}"
         if partition_dir.exists():
-            logger.warning("Partition directory already exists, overwriting: %s", partition_dir)
+            get_run_logger().debug("Partition directory already exists, overwriting: %s", partition_dir)
         partition_dir.mkdir(parents=True, exist_ok=True)
         partition_df = df.filter(pl.col(partition_col) == value).drop(partition_col)
         _write_atomic(partition_df, partition_dir / "data.parquet")
 
 
+@task
 def write_parquet_dataset(
     assets: list[Asset],
     entries: list[SelectionListEntry],

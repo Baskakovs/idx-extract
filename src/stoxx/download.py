@@ -9,6 +9,7 @@ from datetime import date
 from pathlib import Path
 
 import httpx
+from prefect import task
 
 PDF_URL_TEMPLATE = "https://www.stoxx.com/document/Reports/SelectionList/{year}/{month_name}/sl_{symbol}_{ym}.pdf"
 CSV_URL_TEMPLATE = (
@@ -134,6 +135,7 @@ async def _download_pdf_period(
     return None
 
 
+@task(retries=3, retry_delay_seconds=5)
 async def download_selection_lists(
     start: date = START_DATE,
     end: date | None = None,
