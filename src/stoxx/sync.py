@@ -15,6 +15,8 @@ from stoxx.storage import Storage, from_env
 
 logger = logging.getLogger(__name__)
 
+_download_task = task(download_selection_lists, retries=3, retry_delay_seconds=5)  # type: ignore[call-overload]
+
 
 def _read_local_membership(output_dir: Path, review_date: date) -> set[str] | None:
     """Read member ISINs from a local membership partition.
@@ -219,7 +221,7 @@ async def sync(
 
     log.info("Found %d missing periods to process", len(missing_periods))
 
-    result = await download_selection_lists(output_dir=cache_dir, periods=missing_periods)
+    result = await _download_task(output_dir=cache_dir, periods=missing_periods)
 
     if not result.downloaded:
         log.warning("No files downloaded for missing periods")

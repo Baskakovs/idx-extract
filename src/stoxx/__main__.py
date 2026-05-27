@@ -17,7 +17,7 @@ if __name__ == "__main__":
         sync.from_source(
             source=SOURCE,
             entrypoint="prefect_entrypoint.py:sync",
-        ).deploy(
+        ).deploy(  # type: ignore[union-attr]
             name="deployment-idx-extract",
             work_pool_name="idx-extract-stoxx",
         )
@@ -25,6 +25,6 @@ if __name__ == "__main__":
         sync.from_source(
             source=SOURCE,
             entrypoint="prefect_entrypoint.py:sync",
-        ).serve(name="deployment-idx-extract")
+        ).serve(name="deployment-idx-extract")  # type: ignore[union-attr]
     else:
         asyncio.run(sync())

@@ -7,7 +7,10 @@ calls are expected in test code.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
+
+os.environ["PREFECT_LOGGING_TO_API_WHEN_MISSING_FLOW"] = "ignore"
 
 import pytest
 
