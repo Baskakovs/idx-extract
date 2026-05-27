@@ -3,12 +3,19 @@
 import asyncio
 import sys
 
+from prefect.runner.storage import GitRepository
+
 from stoxx.sync import sync
+
+SOURCE = GitRepository(
+    url="https://github.com/Baskakovs/idx-extract.git",
+    branch="main",
+)
 
 if __name__ == "__main__":
     if "--deploy" in sys.argv:
         sync.from_source(
-            source="https://github.com/Baskakovs/idx-extract.git",
+            source=SOURCE,
             entrypoint="prefect_entrypoint.py:sync",
         ).deploy(
             name="deployment-idx-extract",
@@ -16,7 +23,7 @@ if __name__ == "__main__":
         )
     elif "--serve" in sys.argv:
         sync.from_source(
-            source="https://github.com/Baskakovs/idx-extract.git",
+            source=SOURCE,
             entrypoint="prefect_entrypoint.py:sync",
         ).serve(name="deployment-idx-extract")
     else:
