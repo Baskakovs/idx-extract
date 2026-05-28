@@ -126,7 +126,11 @@ def report_unresolved_assets(assets_df: pl.DataFrame) -> None:
         for c in ("isin", "ric", "name", "country", "currency", "first_included", "last_included")
         if c in unresolved.columns
     ]
-    table = unresolved.select(report_cols).unique(subset=["isin"]).sort("isin").to_dicts()
+    report_df = unresolved.select(report_cols).unique(subset=["isin"]).sort("isin")
+    # Cast date columns to strings for JSON serialization
+    date_cols = [c for c in report_df.columns if report_df[c].dtype == pl.Date]
+    report_df = report_df.with_columns(pl.col(c).cast(pl.Utf8) for c in date_cols)
+    table = report_df.to_dicts()
 
     create_table_artifact(
         key="unresolved-yukka-assets",
