@@ -166,7 +166,7 @@ class TestResolveYukkaIds:
 class TestReportUnresolvedAssets:
     """Tests for report_unresolved_assets task."""
 
-    def test_no_artifact_when_all_resolved(self):
+    def test_no_artifact_when_all_resolved(self, tmp_path):
         """No artifact created when every row has a yukka_id."""
         from yukka import report_unresolved_assets
 
@@ -177,14 +177,16 @@ class TestReportUnresolvedAssets:
                 "yukka_id": ["y1", "y2"],
             }
         )
+        path = tmp_path / "assets.parquet"
+        df.write_parquet(path)
 
         with patch("yukka.create_table_artifact") as mock_artifact:
-            report_unresolved_assets(df)
+            report_unresolved_assets(path)
 
         mock_artifact.assert_not_called()
 
-    def test_artifact_created_for_unresolved(self):
-        """Artifact is created listing unresolved assets."""
+    def test_artifact_created_for_unresolved(self, tmp_path):
+        """Artifact is created listing all unresolved assets from the full file."""
         from yukka import report_unresolved_assets
 
         df = pl.DataFrame(
@@ -197,9 +199,11 @@ class TestReportUnresolvedAssets:
                 "yukka_id": ["y1", None, None],
             }
         )
+        path = tmp_path / "assets.parquet"
+        df.write_parquet(path)
 
         with patch("yukka.create_table_artifact") as mock_artifact:
-            report_unresolved_assets(df)
+            report_unresolved_assets(path)
 
         mock_artifact.assert_called_once()
         call_kwargs = mock_artifact.call_args[1]

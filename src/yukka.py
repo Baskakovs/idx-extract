@@ -1,6 +1,7 @@
 """Resolve Yukka entity IDs for assets via ISIN and RIC lookups."""
 
 import logging
+from pathlib import Path
 
 import httpx
 import polars as pl
@@ -107,12 +108,20 @@ def resolve_yukka_ids(assets_df: pl.DataFrame) -> pl.DataFrame:
 
 
 @task
-def report_unresolved_assets(assets_df: pl.DataFrame) -> None:
-    """Create a Prefect artifact reporting assets without a Yukka ID.
+def report_unresolved_assets(assets_path: Path) -> None:
+    """Create a Prefect artifact reporting all assets without a Yukka ID.
+
+    Reads the full assets.parquet from disk so the artifact reflects
+    the complete state across all indexes, not just the current run.
 
     Args:
-        assets_df: Enriched DataFrame with 'yukka_id' column.
+        assets_path: Path to the assets.parquet file.
     """
+    assets_df = pl.read_parquet(assets_path)
+    if "yukka_id" not in assets_df.columns:
+        logger.warning("No yukka_id column in %s, skipping artifact", assets_path)
+        return
+
     unresolved = assets_df.filter(pl.col("yukka_id").is_null())
 
     if len(unresolved) == 0:

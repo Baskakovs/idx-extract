@@ -280,8 +280,8 @@ async def sync(
     assets_path = output_dir / "assets.parquet"
     merged_df = _build_merged_assets(output_dir, all_assets, all_member_isins)
     enriched_df = resolve_yukka_ids(merged_df)
-    report_unresolved_assets(enriched_df)
     _write_atomic(enriched_df, assets_path)
+    report_unresolved_assets(assets_path)
 
     # Upload once at the end
     if new_dates:
