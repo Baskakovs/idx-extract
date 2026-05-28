@@ -1,12 +1,12 @@
 """Resolve Yukka entity IDs for assets via ISIN and RIC lookups."""
 
 import logging
-import os
 
 import httpx
 import polars as pl
 from prefect import task
 from prefect.artifacts import create_table_artifact
+from prefect.blocks.system import Secret
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +16,8 @@ _BATCH_SIZE = 100
 
 def _build_client() -> httpx.Client:
     """Build an authenticated HTTP client for the Yukka metadata API."""
-    token = os.environ["YUKKA_TOKEN"]
+    secret_block = Secret.load("yukka-token")
+    token = secret_block.get()
     return httpx.Client(
         base_url=_BASE_URL,
         headers={"Authorization": f"Bearer {token}"},
