@@ -18,7 +18,7 @@ _BATCH_SIZE = 100
 def _build_client() -> httpx.Client:
     """Build an authenticated HTTP client for the Yukka metadata API."""
     secret_block = Secret.load("yukka-token")
-    token = secret_block.get()
+    token = secret_block.get()  # type: ignore[union-attr]
     return httpx.Client(
         base_url=_BASE_URL,
         headers={"Authorization": f"Bearer {token}"},
