@@ -18,10 +18,10 @@ from stoxx.extract import (
 )
 from stoxx.storage import Storage
 from stoxx.sync import (
+    _build_merged_assets,
     _compute_intervals,
     _download_prior_membership,
     _read_local_membership,
-    _write_merged_assets,
     sync,
 )
 
@@ -231,6 +231,11 @@ class TestSync:
             patch("stoxx.sync.get_periods", return_value=[(2024, 3)]),
             patch("stoxx.sync.download_selection_lists", side_effect=mock_download),
             patch("stoxx.sync.parse_selection_list", return_value=(assets, entries)),
+            patch(
+                "stoxx.sync.resolve_yukka_ids",
+                side_effect=lambda df: df.with_columns(pl.lit(None).cast(pl.Utf8).alias("yukka_id")),
+            ),
+            patch("stoxx.sync.report_unresolved_assets"),
         ):
             result = await sync(output_dir=output_dir, cache_dir=cache_dir)
 
@@ -262,6 +267,11 @@ class TestSync:
             patch("stoxx.sync.download_selection_lists", side_effect=mock_download),
             patch("stoxx.sync.parse_selection_list", return_value=(assets, entries)),
             patch("stoxx.sync.compute_membership") as mock_compute,
+            patch(
+                "stoxx.sync.resolve_yukka_ids",
+                side_effect=lambda df: df.with_columns(pl.lit(None).cast(pl.Utf8).alias("yukka_id")),
+            ),
+            patch("stoxx.sync.report_unresolved_assets"),
         ):
             mock_compute.return_value = [
                 IndexMembership(isin=f"ISIN{i:06d}", is_member=True, entry_reason=EntryReason.BOOTSTRAP)
@@ -317,6 +327,11 @@ class TestSync:
             patch("stoxx.sync.download_selection_lists", side_effect=mock_download),
             patch("stoxx.sync.parse_selection_list", side_effect=mock_parse),
             patch("stoxx.sync.compute_membership", side_effect=mock_compute),
+            patch(
+                "stoxx.sync.resolve_yukka_ids",
+                side_effect=lambda df: df.with_columns(pl.lit(None).cast(pl.Utf8).alias("yukka_id")),
+            ),
+            patch("stoxx.sync.report_unresolved_assets"),
         ):
             result = await sync(output_dir=output_dir, cache_dir=cache_dir)
 
@@ -349,6 +364,11 @@ class TestSync:
             patch("stoxx.sync.get_periods", return_value=[(2024, 3)]),
             patch("stoxx.sync.download_selection_lists", side_effect=mock_download),
             patch("stoxx.sync.parse_selection_list", return_value=(assets, entries)),
+            patch(
+                "stoxx.sync.resolve_yukka_ids",
+                side_effect=lambda df: df.with_columns(pl.lit(None).cast(pl.Utf8).alias("yukka_id")),
+            ),
+            patch("stoxx.sync.report_unresolved_assets"),
         ):
             result = await sync(output_dir=output_dir, cache_dir=cache_dir)
 
@@ -395,6 +415,11 @@ class TestSync:
             patch("stoxx.sync.get_periods", return_value=[(2024, 3), (2024, 6)]),
             patch("stoxx.sync.download_selection_lists", side_effect=mock_download),
             patch("stoxx.sync.parse_selection_list", return_value=(assets, entries)),
+            patch(
+                "stoxx.sync.resolve_yukka_ids",
+                side_effect=lambda df: df.with_columns(pl.lit(None).cast(pl.Utf8).alias("yukka_id")),
+            ),
+            patch("stoxx.sync.report_unresolved_assets"),
         ):
             result = await sync(output_dir=output_dir, cache_dir=cache_dir)
 
@@ -475,8 +500,8 @@ class TestComputeIntervals:
         assert result == []
 
 
-class TestWriteMergedAssetsIntervals:
-    """Tests for _write_merged_assets with interval columns."""
+class TestBuildMergedAssetsIntervals:
+    """Tests for _build_merged_assets with interval columns."""
 
     def test_intervals_appear_in_output(self, tmp_path):
         """Assets parquet contains first_included and last_included columns."""
@@ -504,9 +529,7 @@ class TestWriteMergedAssetsIntervals:
             Asset(isin="ISIN003", internal_key="K3", ric="R3", name="Co3", country="GB", currency="GBP"),
         ]
 
-        _write_merged_assets(output_dir, assets, {"ISIN001", "ISIN002", "ISIN003"})
-
-        result = pl.read_parquet(output_dir / "assets.parquet")
+        result = _build_merged_assets(output_dir, assets, {"ISIN001", "ISIN002", "ISIN003"})
         assert "first_included" in result.columns
         assert "last_included" in result.columns
 
@@ -559,9 +582,7 @@ class TestWriteMergedAssetsIntervals:
             Asset(isin="ISIN001", internal_key="K1", ric="R1", name="Co1", country="DE", currency="EUR"),
         ]
 
-        _write_merged_assets(output_dir, assets, {"ISIN001"})
-
-        result = pl.read_parquet(output_dir / "assets.parquet")
+        result = _build_merged_assets(output_dir, assets, {"ISIN001"})
         isin001 = result.filter(pl.col("isin") == "ISIN001")
         assert len(isin001) == 2
         assert isin001["first_included"][0] == date(2024, 3, 1)

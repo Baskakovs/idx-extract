@@ -12,6 +12,7 @@ from stoxx.download import START_DATE, download_selection_lists, get_periods
 from stoxx.extract import Asset, compute_membership, parse_selection_list
 from stoxx.load import _dataclasses_to_df, _write_atomic, write_parquet_dataset
 from stoxx.storage import Storage, from_env
+from yukka import report_unresolved_assets, resolve_yukka_ids
 
 logger = logging.getLogger(__name__)
 
@@ -127,8 +128,8 @@ def _build_isin_membership(output_dir: Path) -> tuple[dict[str, list[date]], lis
 
 
 @task
-def _write_merged_assets(output_dir: Path, new_assets: list[Asset], member_isins: set[str]) -> None:
-    """Build assets.parquet with membership interval columns from all partitions.
+def _build_merged_assets(output_dir: Path, new_assets: list[Asset], member_isins: set[str]) -> pl.DataFrame:
+    """Build merged assets DataFrame with membership interval columns from all partitions.
 
     Reads all membership partitions to compute per-ISIN intervals, then joins
     with asset metadata. Each (ISIN, interval) pair becomes one row.
@@ -137,6 +138,9 @@ def _write_merged_assets(output_dir: Path, new_assets: list[Asset], member_isins
         output_dir: Root output directory.
         new_assets: Newly parsed assets to merge in.
         member_isins: Set of ISINs that were members in newly processed dates.
+
+    Returns:
+        Merged DataFrame with asset metadata and membership intervals.
     """
     assets_path = output_dir / "assets.parquet"
 
@@ -146,8 +150,8 @@ def _write_merged_assets(output_dir: Path, new_assets: list[Asset], member_isins
 
     if assets_path.exists():
         existing_df = pl.read_parquet(assets_path)
-        # Drop interval columns from existing if present (will be recomputed)
-        drop_cols = [c for c in ("first_included", "last_included") if c in existing_df.columns]
+        # Drop interval/yukka columns from existing if present (will be recomputed)
+        drop_cols = [c for c in ("first_included", "last_included", "yukka_id") if c in existing_df.columns]
         if drop_cols:
             existing_df = existing_df.drop(drop_cols)
         existing_df = existing_df.unique(subset=["isin"], keep="first")
@@ -161,10 +165,8 @@ def _write_merged_assets(output_dir: Path, new_assets: list[Asset], member_isins
     log = get_run_logger()
 
     if not all_dates:
-        # No membership data yet — write metadata without intervals
-        _write_atomic(metadata_df, assets_path)
-        log.info("Wrote %d assets (no membership data for intervals)", len(metadata_df))
-        return
+        log.info("Built %d assets (no membership data for intervals)", len(metadata_df))
+        return metadata_df
 
     # Build interval rows
     rows: list[dict[str, date | str]] = []
@@ -173,9 +175,8 @@ def _write_merged_assets(output_dir: Path, new_assets: list[Asset], member_isins
             rows.append({"isin": isin, "first_included": first, "last_included": last})
 
     if not rows:
-        _write_atomic(metadata_df, assets_path)
-        log.info("Wrote %d assets (no member intervals found)", len(metadata_df))
-        return
+        log.info("Built %d assets (no member intervals found)", len(metadata_df))
+        return metadata_df
 
     intervals_df = pl.DataFrame(rows).with_columns(
         pl.col("first_included").cast(pl.Date),
@@ -185,8 +186,8 @@ def _write_merged_assets(output_dir: Path, new_assets: list[Asset], member_isins
     # Join metadata with intervals — one row per (ISIN, interval)
     combined = intervals_df.join(metadata_df, on="isin", how="left")
 
-    _write_atomic(combined, assets_path)
-    log.info("Wrote %d asset rows (%d unique ISINs)", len(combined), combined["isin"].n_unique())
+    log.info("Built %d asset rows (%d unique ISINs)", len(combined), combined["isin"].n_unique())
+    return combined
 
 
 @flow(log_prints=True)
@@ -275,8 +276,12 @@ async def sync(
             new_dates.append(rd)
             log.info("Processed review date %s", rd)
 
-    # Merge new assets with existing assets.parquet, keeping only members
-    _write_merged_assets(output_dir, all_assets, all_member_isins)
+    # Merge new assets, enrich with Yukka IDs, and write
+    assets_path = output_dir / "assets.parquet"
+    merged_df = _build_merged_assets(output_dir, all_assets, all_member_isins)
+    enriched_df = resolve_yukka_ids(merged_df)
+    _write_atomic(enriched_df, assets_path)
+    report_unresolved_assets(assets_path)
 
     # Upload once at the end
     if new_dates:
