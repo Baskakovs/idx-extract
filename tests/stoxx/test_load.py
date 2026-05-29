@@ -84,6 +84,16 @@ class TestWriteParquetDataset:
         tmp_files = list(tmp_path.rglob("*.tmp"))
         assert tmp_files == []
 
+    def test_entries_contain_ric_from_assets(self, tmp_path, parsed_csv, membership):
+        """Entries partitions include a ric column joined from assets."""
+        assets, entries = parsed_csv
+        write_parquet_dataset(assets, entries, membership, tmp_path)
+
+        partition_dir = tmp_path / "entries" / "review_date=2024-03-01"
+        df = pl.read_parquet(partition_dir / "data.parquet")
+        assert "ric" in df.columns
+        assert df["ric"].null_count() < len(df)  # Most entries should have a RIC
+
     def test_roundtrip_preserves_data(self, tmp_path, parsed_csv, membership):
         """Write assets and read back, verifying all fields match."""
         assets, entries = parsed_csv
