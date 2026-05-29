@@ -70,8 +70,10 @@ def write_parquet_dataset(
     assets_df = _dataclasses_to_df(assets)
     _write_atomic(assets_df, output_dir / "assets.parquet")
 
-    # Entries: partitioned by review_date
+    # Entries: partitioned by review_date (with RIC from assets)
     entries_df = _dataclasses_to_df(entries)
+    ric_df = assets_df.select("isin", "ric").unique(subset=["isin"], keep="first")
+    entries_df = entries_df.join(ric_df, on="isin", how="left")
     entries_df = entries_df.with_columns(pl.col("review_date").cast(pl.Date))
     _write_partitioned(entries_df, output_dir / "entries", "review_date")
 
