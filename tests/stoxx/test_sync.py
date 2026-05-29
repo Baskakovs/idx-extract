@@ -724,6 +724,36 @@ class TestBuildRankingTable:
         # rd3: re-entered with rank 2
         assert result.filter(pl.col("date") == rd3)["RIC_X"][0] == 2
 
+    def test_exactly_600_members_per_day(self, tmp_path):
+        """Each day has exactly 600 non-null ranks (the STOXX 600 constituent count)."""
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+
+        rd = date(2024, 3, 1)
+        n_total = 700
+        n_members = 600
+
+        entries = [
+            {"isin": f"ISIN_{i}", "ric": f"RIC_{i}", "rank": i + 1, "ff_mcap": float(n_total - i)}
+            for i in range(n_total)
+        ]
+        membership = [
+            {"isin": f"ISIN_{i}", "is_member": i < n_members, "entry_reason": "bootstrap"} for i in range(n_total)
+        ]
+
+        _write_entries_partition(output_dir, rd, entries)
+        _write_membership_partition(output_dir, rd, membership)
+
+        with patch("stoxx.sync.date") as mock_date:
+            mock_date.today.return_value = date(2024, 3, 3)
+            mock_date.fromisoformat = date.fromisoformat
+            result = _build_ranking_table(output_dir)
+
+        ric_cols = [c for c in result.columns if c != "date"]
+        for row in result.iter_rows(named=True):
+            non_null = sum(1 for c in ric_cols if row[c] is not None)
+            assert non_null == n_members, f"Expected {n_members} members on {row['date']}, got {non_null}"
+
     def test_empty_partitions(self, tmp_path):
         """No data produces a DataFrame with only a date column."""
         output_dir = tmp_path / "output"
