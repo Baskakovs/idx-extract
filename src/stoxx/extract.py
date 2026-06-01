@@ -255,7 +255,7 @@ def compute_membership(
     """
     # Filter to ranked entries, sort by FF Mcap DESC then ISIN ASC for deterministic tiebreaker
     ranked = [e for e in entries if e.rank is not None]
-    ranked.sort(key=lambda e: (-(e.ff_mcap or 0), e.isin))
+    ranked.sort(key=lambda e: (e.rank, e.isin))
 
     if prior_membership is None:
         logger.warning("Bootstrap mode: no prior membership provided, taking top 600 by FF Mcap")

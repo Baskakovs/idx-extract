@@ -292,7 +292,7 @@ async def sync(
         List of newly processed review dates.
     """
     log = get_run_logger()
-    storage = from_env()
+    storage = await from_env()
     output_dir = Path(output_dir)
     cache_dir = Path(cache_dir)
     today = date.today()

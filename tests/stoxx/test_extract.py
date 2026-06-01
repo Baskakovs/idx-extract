@@ -127,10 +127,10 @@ class TestComputeMembership:
         assert result1 == result2
 
     def test_ties_are_handled_consistently(self):
-        """Two entries with same FF Mcap are ordered by ISIN alphabetically."""
+        """Two entries with same rank are ordered by ISIN alphabetically."""
         entries = [
             SelectionListEntry(isin="ISIN_B", review_date=date(2024, 3, 1), ff_mcap=50000.0, rank=1),
-            SelectionListEntry(isin="ISIN_A", review_date=date(2024, 3, 1), ff_mcap=50000.0, rank=2),
+            SelectionListEntry(isin="ISIN_A", review_date=date(2024, 3, 1), ff_mcap=50000.0, rank=1),
         ]
         # Add 598 more entries with lower mcap
         for i in range(598):
@@ -139,7 +139,7 @@ class TestComputeMembership:
                     isin=f"ISIN_Z{i:06d}",
                     review_date=date(2024, 3, 1),
                     ff_mcap=40000.0 - i,
-                    rank=i + 3,
+                    rank=i + 2,
                 )
             )
         result = compute_membership(entries, prior_membership=None)
