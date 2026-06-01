@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import re
 from abc import ABC, abstractmethod
 from datetime import date
@@ -108,19 +109,17 @@ class R2Storage(Storage):
         logger.info("Downloaded %s -> %s", key, local_path)
 
 
-async def from_env() -> R2Storage:
-    """Create an R2Storage instance from Prefect Secret blocks.
+def from_env() -> R2Storage:
+    """Create an R2Storage instance from environment variables.
 
-    Loads r2-account-id, r2-access-key-id, r2-secret-access-key, and r2-bucket-name.
+    Reads R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, and R2_BUCKET_NAME.
 
     Returns:
         Configured R2Storage instance.
     """
-    from prefect.blocks.system import Secret
-
     return R2Storage(
-        account_id=(await Secret.load("r2-account-id")).get(),  # type: ignore[union-attr]
-        access_key_id=(await Secret.load("r2-access-key-id")).get(),  # type: ignore[union-attr]
-        secret_access_key=(await Secret.load("r2-secret-access-key")).get(),  # type: ignore[union-attr]
-        bucket_name=(await Secret.load("r2-bucket-name")).get(),  # type: ignore[union-attr]
+        account_id=os.environ["R2_ACCOUNT_ID"],
+        access_key_id=os.environ["R2_ACCESS_KEY_ID"],
+        secret_access_key=os.environ["R2_SECRET_ACCESS_KEY"],
+        bucket_name=os.environ["R2_BUCKET_NAME"],
     )

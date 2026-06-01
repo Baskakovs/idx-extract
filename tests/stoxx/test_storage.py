@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from datetime import date
-from unittest.mock import MagicMock, patch
 
 import pytest
 from botocore.stub import Stubber
@@ -146,33 +145,22 @@ class TestDownloadFile:
 class TestFromEnv:
     """Tests for the from_env factory function."""
 
-    @pytest.mark.asyncio
-    async def test_reads_secret_blocks(self):
-        """Factory reads all required Prefect Secret blocks."""
-        secrets = {
-            "r2-account-id": "test-account",
-            "r2-access-key-id": "test-key",
-            "r2-secret-access-key": "test-secret",
-            "r2-bucket-name": "test-bucket",
-        }
+    def test_reads_environment(self, monkeypatch):
+        """Factory reads all required environment variables."""
+        monkeypatch.setenv("R2_ACCOUNT_ID", "test-account")
+        monkeypatch.setenv("R2_ACCESS_KEY_ID", "test-key")
+        monkeypatch.setenv("R2_SECRET_ACCESS_KEY", "test-secret")
+        monkeypatch.setenv("R2_BUCKET_NAME", "test-bucket")
 
-        async def fake_load(name):
-            mock = MagicMock()
-            mock.get.return_value = secrets[name]
-            return mock
-
-        with patch("prefect.blocks.system.Secret.load", side_effect=fake_load):
-            storage = await from_env()
+        storage = from_env()
 
         assert isinstance(storage, R2Storage)
         assert storage._bucket_name == "test-bucket"
 
-    @pytest.mark.asyncio
-    async def test_missing_block_raises(self):
-        """Missing Secret block raises AttributeError."""
+    def test_missing_env_raises(self, monkeypatch):
+        """Missing environment variable raises KeyError."""
+        for var in ["R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_BUCKET_NAME"]:
+            monkeypatch.delenv(var, raising=False)
 
-        async def fake_load(name):
-            return None
-
-        with patch("prefect.blocks.system.Secret.load", side_effect=fake_load), pytest.raises(AttributeError):
-            await from_env()
+        with pytest.raises(KeyError):
+            from_env()

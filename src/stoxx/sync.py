@@ -190,93 +190,6 @@ def _build_merged_assets(output_dir: Path, new_assets: list[Asset], member_isins
     return combined
 
 
-@task
-def _build_ranking_table(output_dir: Path) -> pl.DataFrame:
-    """Build a wide-format ranking table with RICs as columns and daily dates as rows.
-
-    Reads entries and membership partitions to produce a forward-filled daily
-    ranking view. Members get their rank; non-members get null. Uses 0 as a
-    sentinel during forward-fill to correctly propagate exits.
-
-    Args:
-        output_dir: Root output directory containing entries and membership subdirectories.
-
-    Returns:
-        DataFrame with a ``date`` column and one column per RIC containing forward-filled ranks.
-    """
-    entries_dir = output_dir / "entries"
-    membership_dir = output_dir / "membership"
-
-    if not entries_dir.exists() or not membership_dir.exists():
-        return pl.DataFrame({"date": []}).cast({"date": pl.Date})
-
-    all_known_rics: set[str] = set()
-    long_rows: list[dict] = []
-
-    review_dates: list[date] = []
-    for partition in sorted(entries_dir.iterdir()):
-        if not partition.name.startswith("review_date="):
-            continue
-        rd = date.fromisoformat(partition.name.split("=", 1)[1])
-        review_dates.append(rd)
-
-    for rd in review_dates:
-        entries_path = entries_dir / f"review_date={rd}" / "data.parquet"
-        membership_path = membership_dir / f"review_date={rd}" / "data.parquet"
-
-        if not entries_path.exists() or not membership_path.exists():
-            continue
-
-        entries_df = pl.read_parquet(entries_path)
-        membership_df = pl.read_parquet(membership_path)
-
-        # Filter entries to only those with a valid RIC
-        if "ric" not in entries_df.columns:
-            continue
-        entries_df = entries_df.filter(pl.col("ric").is_not_null())
-
-        # Get member ISINs
-        member_isins = set(membership_df.filter(pl.col("is_member"))["isin"].to_list())
-
-        # Build ric->rank for members, deduplicate
-        ric_rank: dict[str, int] = {}
-        for row in entries_df.iter_rows(named=True):
-            ric = row["ric"]
-            if ric in ric_rank:
-                continue
-            all_known_rics.add(ric)
-            if row["isin"] in member_isins:
-                ric_rank[ric] = row["rank"]
-
-        # Members get their rank; all other known RICs get 0 (sentinel for exit)
-        for ric in all_known_rics:
-            rank = ric_rank.get(ric, 0)
-            long_rows.append({"date": rd, "ric": ric, "rank": rank})
-
-    if not long_rows:
-        return pl.DataFrame({"date": []}).cast({"date": pl.Date})
-
-    long_df = pl.DataFrame(long_rows).with_columns(pl.col("date").cast(pl.Date))
-
-    # Pivot to wide format: rows=date, columns=RIC, values=rank
-    wide_df = long_df.pivot(on="ric", index="date", values="rank")
-
-    # Expand to daily date range
-    min_date: date = wide_df["date"].min()  # type: ignore[assignment]
-    max_date = date.today()
-    daily_dates = pl.DataFrame({"date": pl.date_range(min_date, max_date, eager=True)})
-
-    # Join with daily range, sort, forward-fill
-    result = daily_dates.join(wide_df, on="date", how="left").sort("date")
-    ric_cols = [c for c in result.columns if c != "date"]
-    result = result.with_columns(pl.col(c).forward_fill() for c in ric_cols)
-
-    # Replace sentinel 0 with null
-    result = result.with_columns(pl.when(pl.col(c) == 0).then(None).otherwise(pl.col(c)).alias(c) for c in ric_cols)
-
-    return result
-
-
 @flow(log_prints=True)
 async def sync(
     output_dir: Path | str = "output/STOXX600",
@@ -292,7 +205,7 @@ async def sync(
         List of newly processed review dates.
     """
     log = get_run_logger()
-    storage = await from_env()
+    storage = from_env()
     output_dir = Path(output_dir)
     cache_dir = Path(cache_dir)
     today = date.today()
@@ -369,10 +282,6 @@ async def sync(
     enriched_df = resolve_yukka_ids(merged_df)
     _write_atomic(enriched_df, assets_path)
     report_unresolved_assets(assets_path)
-
-    # Build and write ranking table
-    ranking_df = _build_ranking_table(output_dir)
-    _write_atomic(ranking_df, output_dir / "ranking.parquet")
 
     # Upload once at the end
     if new_dates:
