@@ -19,6 +19,7 @@ from stoxx.extract import (
 from stoxx.storage import Storage
 from stoxx.sync import (
     _build_merged_assets,
+    _build_ranking_table,
     _compute_intervals,
     _download_prior_membership,
     _read_local_membership,
@@ -589,3 +590,239 @@ class TestBuildMergedAssetsIntervals:
         assert isin001["last_included"][0] == date(2024, 3, 1)
         assert isin001["first_included"][1] == date(2024, 9, 1)
         assert isin001["last_included"][1] == date(2024, 9, 1)
+
+
+def _write_entries_partition(output_dir: Path, review_date: date, entries: list[dict]) -> None:
+    """Write an entries partition with ric, isin, rank columns."""
+    partition = output_dir / "entries" / f"review_date={review_date}"
+    partition.mkdir(parents=True, exist_ok=True)
+    df = pl.DataFrame(entries)
+    df.write_parquet(partition / "data.parquet")
+
+
+def _write_membership_partition(output_dir: Path, review_date: date, membership: list[dict]) -> None:
+    """Write a membership partition with isin, is_member, entry_reason columns."""
+    partition = output_dir / "membership" / f"review_date={review_date}"
+    partition.mkdir(parents=True, exist_ok=True)
+    df = pl.DataFrame(membership)
+    df.write_parquet(partition / "data.parquet")
+
+
+class TestBuildRankingTable:
+    """Tests for _build_ranking_table."""
+
+    def test_basic_ranking_table(self, tmp_path):
+        """Forward-fills ranks correctly across two review dates with entries/exits."""
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+
+        rd1 = date(2024, 3, 1)
+        rd2 = date(2024, 6, 1)
+
+        # rd1: A (rank 1, member), B (rank 2, member), C (rank 3, not member)
+        _write_entries_partition(
+            output_dir,
+            rd1,
+            [
+                {"isin": "ISIN_A", "ric": "RIC_A", "rank": 1, "ff_mcap": 1000.0},
+                {"isin": "ISIN_B", "ric": "RIC_B", "rank": 2, "ff_mcap": 900.0},
+                {"isin": "ISIN_C", "ric": "RIC_C", "rank": 3, "ff_mcap": 800.0},
+            ],
+        )
+        _write_membership_partition(
+            output_dir,
+            rd1,
+            [
+                {"isin": "ISIN_A", "is_member": True, "entry_reason": "bootstrap"},
+                {"isin": "ISIN_B", "is_member": True, "entry_reason": "bootstrap"},
+                {"isin": "ISIN_C", "is_member": False, "entry_reason": "bootstrap"},
+            ],
+        )
+
+        # rd2: A (rank 1, member), B (rank 5, NOT member), C (rank 2, member)
+        _write_entries_partition(
+            output_dir,
+            rd2,
+            [
+                {"isin": "ISIN_A", "ric": "RIC_A", "rank": 1, "ff_mcap": 1100.0},
+                {"isin": "ISIN_B", "ric": "RIC_B", "rank": 5, "ff_mcap": 500.0},
+                {"isin": "ISIN_C", "ric": "RIC_C", "rank": 2, "ff_mcap": 950.0},
+            ],
+        )
+        _write_membership_partition(
+            output_dir,
+            rd2,
+            [
+                {"isin": "ISIN_A", "is_member": True, "entry_reason": "top_550"},
+                {"isin": "ISIN_B", "is_member": False, "entry_reason": "top_550"},
+                {"isin": "ISIN_C", "is_member": True, "entry_reason": "top_550"},
+            ],
+        )
+
+        with patch("stoxx.sync.date") as mock_date:
+            mock_date.today.return_value = date(2024, 6, 3)
+            mock_date.fromisoformat = date.fromisoformat
+            result = _build_ranking_table(output_dir)
+
+        assert "date" in result.columns
+        assert "RIC_A" in result.columns
+        assert "RIC_B" in result.columns
+        assert "RIC_C" in result.columns
+
+        # On rd1 day: A=1, B=2, C=null (not member)
+        row_rd1 = result.filter(pl.col("date") == rd1)
+        assert row_rd1["RIC_A"][0] == 1
+        assert row_rd1["RIC_B"][0] == 2
+        assert row_rd1["RIC_C"][0] is None
+
+        # On rd2 day: A=1, B=null (exited), C=2 (entered)
+        row_rd2 = result.filter(pl.col("date") == rd2)
+        assert row_rd2["RIC_A"][0] == 1
+        assert row_rd2["RIC_B"][0] is None
+        assert row_rd2["RIC_C"][0] == 2
+
+        # Day after rd2: forward-filled from rd2
+        row_after = result.filter(pl.col("date") == date(2024, 6, 2))
+        assert row_after["RIC_A"][0] == 1
+        assert row_after["RIC_B"][0] is None
+        assert row_after["RIC_C"][0] == 2
+
+    def test_reentry(self, tmp_path):
+        """A company that exits then re-enters has null in the gap period."""
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+
+        rd1 = date(2024, 3, 1)
+        rd2 = date(2024, 6, 1)
+        rd3 = date(2024, 9, 1)
+
+        for rd, rank, is_member in [(rd1, 1, True), (rd2, 5, False), (rd3, 2, True)]:
+            _write_entries_partition(
+                output_dir,
+                rd,
+                [{"isin": "ISIN_X", "ric": "RIC_X", "rank": rank, "ff_mcap": 1000.0}],
+            )
+            _write_membership_partition(
+                output_dir,
+                rd,
+                [{"isin": "ISIN_X", "is_member": is_member, "entry_reason": "top_550"}],
+            )
+
+        with patch("stoxx.sync.date") as mock_date:
+            mock_date.today.return_value = date(2024, 9, 2)
+            mock_date.fromisoformat = date.fromisoformat
+            result = _build_ranking_table(output_dir)
+
+        # rd1: member with rank 1
+        assert result.filter(pl.col("date") == rd1)["RIC_X"][0] == 1
+        # Between rd1 and rd2: forward-filled rank 1
+        assert result.filter(pl.col("date") == date(2024, 4, 1))["RIC_X"][0] == 1
+        # rd2: not member -> null
+        assert result.filter(pl.col("date") == rd2)["RIC_X"][0] is None
+        # Between rd2 and rd3: forward-filled null
+        assert result.filter(pl.col("date") == date(2024, 7, 1))["RIC_X"][0] is None
+        # rd3: re-entered with rank 2
+        assert result.filter(pl.col("date") == rd3)["RIC_X"][0] == 2
+
+    def test_exactly_600_members_per_day(self, tmp_path):
+        """Each day has exactly 600 non-null ranks (the STOXX 600 constituent count)."""
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+
+        rd = date(2024, 3, 1)
+        n_total = 700
+        n_members = 600
+
+        entries = [
+            {"isin": f"ISIN_{i}", "ric": f"RIC_{i}", "rank": i + 1, "ff_mcap": float(n_total - i)}
+            for i in range(n_total)
+        ]
+        membership = [
+            {"isin": f"ISIN_{i}", "is_member": i < n_members, "entry_reason": "bootstrap"} for i in range(n_total)
+        ]
+
+        _write_entries_partition(output_dir, rd, entries)
+        _write_membership_partition(output_dir, rd, membership)
+
+        with patch("stoxx.sync.date") as mock_date:
+            mock_date.today.return_value = date(2024, 3, 3)
+            mock_date.fromisoformat = date.fromisoformat
+            result = _build_ranking_table(output_dir)
+
+        ric_cols = [c for c in result.columns if c != "date"]
+        for row in result.iter_rows(named=True):
+            non_null = sum(1 for c in ric_cols if row[c] is not None)
+            assert non_null == n_members, f"Expected {n_members} members on {row['date']}, got {non_null}"
+
+    def test_empty_partitions(self, tmp_path):
+        """No data produces a DataFrame with only a date column."""
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+
+        result = _build_ranking_table(output_dir)
+
+        assert "date" in result.columns
+        assert len(result) == 0
+
+    def test_uses_ric_columns(self, tmp_path):
+        """Columns are RIC codes, not ISINs."""
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+
+        rd = date(2024, 3, 1)
+        _write_entries_partition(
+            output_dir,
+            rd,
+            [{"isin": "ISIN_A", "ric": "VOW3.DE", "rank": 1, "ff_mcap": 1000.0}],
+        )
+        _write_membership_partition(
+            output_dir,
+            rd,
+            [{"isin": "ISIN_A", "is_member": True, "entry_reason": "bootstrap"}],
+        )
+
+        with patch("stoxx.sync.date") as mock_date:
+            mock_date.today.return_value = date(2024, 3, 2)
+            mock_date.fromisoformat = date.fromisoformat
+            result = _build_ranking_table(output_dir)
+
+        assert "VOW3.DE" in result.columns
+        assert "ISIN_A" not in result.columns
+
+    @pytest.mark.asyncio
+    async def test_ranking_written_during_sync(self, tmp_path):
+        """Sync produces a ranking.parquet file in the output directory."""
+        storage = MemoryStorage()
+        output_dir = tmp_path / "output"
+        cache_dir = tmp_path / "cache"
+
+        rd = date(2024, 3, 1)
+        assets = _make_assets()
+        entries = _make_entries(rd)
+
+        async def mock_download(**kwargs):
+            result = DownloadResult()
+            csv_path = cache_dir / "test.csv"
+            csv_path.parent.mkdir(parents=True, exist_ok=True)
+            csv_path.write_text("placeholder")
+            result.downloaded.append(csv_path)
+            return result
+
+        with (
+            patch("stoxx.sync.from_env", return_value=storage),
+            patch("stoxx.sync.get_periods", return_value=[(2024, 3)]),
+            patch("stoxx.sync.download_selection_lists", side_effect=mock_download),
+            patch("stoxx.sync.parse_selection_list", return_value=(assets, entries)),
+            patch(
+                "stoxx.sync.resolve_yukka_ids",
+                side_effect=lambda df: df.with_columns(pl.lit(None).cast(pl.Utf8).alias("yukka_id")),
+            ),
+            patch("stoxx.sync.report_unresolved_assets"),
+        ):
+            result = await sync(output_dir=output_dir, cache_dir=cache_dir)
+
+        assert result == [rd]
+        assert (output_dir / "ranking.parquet").exists()
+        ranking_df = pl.read_parquet(output_dir / "ranking.parquet")
+        assert "date" in ranking_df.columns
+        assert len(ranking_df) > 0
