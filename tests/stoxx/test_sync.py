@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import date
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import polars as pl
 import pytest
@@ -190,7 +190,7 @@ class TestSync:
 
         # Pre-populate storage with all periods up to a known date
         with (
-            patch("stoxx.sync.from_env", return_value=storage),
+            patch("stoxx.sync.from_env", new_callable=AsyncMock, return_value=storage),
             patch("stoxx.sync.date") as mock_date,
         ):
             mock_date.today.return_value = date(2024, 3, 15)
@@ -228,7 +228,7 @@ class TestSync:
             return result
 
         with (
-            patch("stoxx.sync.from_env", return_value=storage),
+            patch("stoxx.sync.from_env", new_callable=AsyncMock, return_value=storage),
             patch("stoxx.sync.get_periods", return_value=[(2024, 3)]),
             patch("stoxx.sync.download_selection_lists", side_effect=mock_download),
             patch("stoxx.sync.parse_selection_list", return_value=(assets, entries)),
@@ -263,7 +263,7 @@ class TestSync:
             return result
 
         with (
-            patch("stoxx.sync.from_env", return_value=storage),
+            patch("stoxx.sync.from_env", new_callable=AsyncMock, return_value=storage),
             patch("stoxx.sync.get_periods", return_value=[(2024, 3)]),
             patch("stoxx.sync.download_selection_lists", side_effect=mock_download),
             patch("stoxx.sync.parse_selection_list", return_value=(assets, entries)),
@@ -323,7 +323,7 @@ class TestSync:
             ]
 
         with (
-            patch("stoxx.sync.from_env", return_value=storage),
+            patch("stoxx.sync.from_env", new_callable=AsyncMock, return_value=storage),
             patch("stoxx.sync.get_periods", return_value=[(2024, 3), (2024, 6)]),
             patch("stoxx.sync.download_selection_lists", side_effect=mock_download),
             patch("stoxx.sync.parse_selection_list", side_effect=mock_parse),
@@ -361,7 +361,7 @@ class TestSync:
             return result
 
         with (
-            patch("stoxx.sync.from_env", return_value=storage),
+            patch("stoxx.sync.from_env", new_callable=AsyncMock, return_value=storage),
             patch("stoxx.sync.get_periods", return_value=[(2024, 3)]),
             patch("stoxx.sync.download_selection_lists", side_effect=mock_download),
             patch("stoxx.sync.parse_selection_list", return_value=(assets, entries)),
@@ -412,7 +412,7 @@ class TestSync:
             return result
 
         with (
-            patch("stoxx.sync.from_env", return_value=storage),
+            patch("stoxx.sync.from_env", new_callable=AsyncMock, return_value=storage),
             patch("stoxx.sync.get_periods", return_value=[(2024, 3), (2024, 6)]),
             patch("stoxx.sync.download_selection_lists", side_effect=mock_download),
             patch("stoxx.sync.parse_selection_list", return_value=(assets, entries)),
@@ -809,7 +809,7 @@ class TestBuildRankingTable:
             return result
 
         with (
-            patch("stoxx.sync.from_env", return_value=storage),
+            patch("stoxx.sync.from_env", new_callable=AsyncMock, return_value=storage),
             patch("stoxx.sync.get_periods", return_value=[(2024, 3)]),
             patch("stoxx.sync.download_selection_lists", side_effect=mock_download),
             patch("stoxx.sync.parse_selection_list", return_value=(assets, entries)),
