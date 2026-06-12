@@ -19,6 +19,40 @@ logger = logging.getLogger(__name__)
 _download_task = task(download_selection_lists, retries=3, retry_delay_seconds=5)  # type: ignore[call-overload]
 
 
+def _build_isin_lookup(storage: Storage, output_dir: Path, tmp_path: Path) -> dict[str, str]:
+    """Build an internal_key→ISIN lookup from existing assets data.
+
+    Args:
+        storage: Storage backend for downloading remote files.
+        output_dir: Local output directory that may contain assets.parquet.
+        tmp_path: Temporary directory for downloaded files.
+
+    Returns:
+        Dict mapping internal_key to ISIN. Empty dict if no assets data exists.
+    """
+    assets_path = output_dir / "assets.parquet"
+    if not assets_path.exists():
+        remote_key = "STOXX600/assets.parquet"
+        local_path = tmp_path / "assets_lookup.parquet"
+        try:
+            storage.download_file(remote_key, local_path)
+            assets_path = local_path
+        except Exception:
+            logger.info("No existing assets file found for ISIN lookup")
+            return {}
+
+    df = pl.read_parquet(assets_path)
+    if "internal_key" not in df.columns or "isin" not in df.columns:
+        return {}
+
+    lookup: dict[str, str] = {}
+    for row in df.select(["internal_key", "isin"]).iter_rows():
+        key, isin = row
+        if key and isin and str(isin).strip() and not str(isin).startswith("KEY_"):
+            lookup[str(key).strip()] = str(isin).strip()
+    return lookup
+
+
 def _read_local_membership(output_dir: Path, review_date: date) -> set[str] | None:
     """Read member ISINs from a local membership partition.
 
@@ -277,6 +311,47 @@ def _build_ranking_table(output_dir: Path) -> pl.DataFrame:
     return result
 
 
+@task
+def _validate_ranking_table(ranking_df: pl.DataFrame, review_dates: list[date]) -> None:
+    """Check that each review date row in the ranking table has ranks covering 1-100.
+
+    Args:
+        ranking_df: Wide-format ranking DataFrame (date column + RIC columns).
+        review_dates: Review dates that should be validated.
+    """
+    log = get_run_logger()
+    ric_cols = [c for c in ranking_df.columns if c != "date"]
+
+    if not ric_cols or ranking_df.is_empty():
+        log.warning("Ranking table is empty, skipping validation")
+        return
+
+    for rd in review_dates:
+        row = ranking_df.filter(pl.col("date") == rd)
+        if row.is_empty():
+            log.warning("Ranking validation: no row for review date %s", rd)
+            continue
+
+        ranks = set()
+        for col in ric_cols:
+            val = row[col][0]
+            if val is not None:
+                ranks.add(int(val))
+
+        expected = set(range(1, 101))
+        missing = expected - ranks
+        if missing:
+            log.warning(
+                "Ranking validation FAILED for %s: missing %d ranks in 1-100 (e.g. %s). Only %d distinct ranks found.",
+                rd,
+                len(missing),
+                sorted(missing)[:10],
+                len(ranks),
+            )
+        else:
+            log.info("Ranking validation passed for %s: ranks 1-100 all present (%d total ranks)", rd, len(ranks))
+
+
 @flow(log_prints=True)
 async def sync(
     output_dir: Path | str = "output/STOXX600",
@@ -317,28 +392,34 @@ async def sync(
 
     log.info("Downloaded %d files", len(result.downloaded))
 
-    # Parse all downloaded files and group by review_date
-    review_date_groups: dict[date, tuple[list, list]] = {}
-    for filepath in result.downloaded:
-        assets, entries = parse_selection_list(filepath)
-        if entries:
-            rd = entries[0].review_date
-            if rd in review_date_groups:
-                existing_assets, existing_entries = review_date_groups[rd]
-                existing_assets.extend(assets)
-                existing_entries.extend(entries)
-            else:
-                review_date_groups[rd] = (assets, entries)
-
-    log.info("Parsed %d review dates", len(review_date_groups))
-
-    sorted_dates = sorted(review_date_groups.keys())
     new_dates: list[date] = []
     all_member_isins: set[str] = set()
     all_assets: list[Asset] = []
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp_path = Path(tmp_dir)
+
+        # Build ISIN lookup from existing assets for resolving missing ISINs
+        isin_lookup = _build_isin_lookup(storage, output_dir, tmp_path)
+        if isin_lookup:
+            log.info("Built ISIN lookup with %d entries from historical assets", len(isin_lookup))
+
+        # Parse all downloaded files and group by review_date
+        review_date_groups: dict[date, tuple[list, list]] = {}
+        for filepath in result.downloaded:
+            assets, entries = parse_selection_list(filepath, isin_lookup=isin_lookup)
+            if entries:
+                rd = entries[0].review_date
+                if rd in review_date_groups:
+                    existing_assets, existing_entries = review_date_groups[rd]
+                    existing_assets.extend(assets)
+                    existing_entries.extend(entries)
+                else:
+                    review_date_groups[rd] = (assets, entries)
+
+        log.info("Parsed %d review dates", len(review_date_groups))
+
+        sorted_dates = sorted(review_date_groups.keys())
 
         # Find the most recent remote date for initial prior membership
         prior_date = remote_dates[-1] if remote_dates else None
@@ -370,8 +451,9 @@ async def sync(
     _write_atomic(enriched_df, assets_path)
     report_unresolved_assets(assets_path)
 
-    # Build and write ranking table
+    # Build, validate, and write ranking table
     ranking_df = _build_ranking_table(output_dir)
+    _validate_ranking_table(ranking_df, new_dates)
     _write_atomic(ranking_df, output_dir / "ranking.parquet")
 
     # Upload once at the end
