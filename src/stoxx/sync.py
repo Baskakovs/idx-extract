@@ -244,6 +244,15 @@ def _build_ranking_table(output_dir: Path) -> pl.DataFrame:
     if not entries_dir.exists() or not membership_dir.exists():
         return pl.DataFrame({"date": []}).cast({"date": pl.Date})
 
+    # Build ISIN->RIC lookup from assets for entries that lack a ric column
+    isin_to_ric: dict[str, str] = {}
+    assets_path = output_dir / "assets.parquet"
+    if assets_path.exists():
+        assets_df = pl.read_parquet(assets_path)
+        if "isin" in assets_df.columns and "ric" in assets_df.columns:
+            for row in assets_df.select(["isin", "ric"]).iter_rows():
+                isin_to_ric[row[0]] = row[1]
+
     all_known_rics: set[str] = set()
     long_rows: list[dict] = []
 
@@ -264,9 +273,13 @@ def _build_ranking_table(output_dir: Path) -> pl.DataFrame:
         entries_df = pl.read_parquet(entries_path)
         membership_df = pl.read_parquet(membership_path)
 
-        # Filter entries to only those with a valid RIC
+        # Join RIC from assets if entries lack a ric column
         if "ric" not in entries_df.columns:
-            continue
+            if not isin_to_ric:
+                continue
+            ric_series = entries_df["isin"].map_elements(lambda x: isin_to_ric.get(x), return_dtype=pl.Utf8)
+            entries_df = entries_df.with_columns(ric_series.alias("ric"))
+
         entries_df = entries_df.filter(pl.col("ric").is_not_null())
 
         # Get member ISINs
