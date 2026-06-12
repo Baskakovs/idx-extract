@@ -791,6 +791,59 @@ class TestBuildRankingTable:
         assert "VOW3.DE" in result.columns
         assert "ISIN_A" not in result.columns
 
+    def test_resolves_ric_from_assets_when_missing(self, tmp_path):
+        """Entries without a ric column get RIC resolved from assets.parquet."""
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+
+        rd = date(2024, 3, 1)
+
+        # Write entries WITHOUT ric column (like legacy partitions)
+        entries_partition = output_dir / "entries" / f"review_date={rd}"
+        entries_partition.mkdir(parents=True)
+        entries_df = pl.DataFrame(
+            {
+                "isin": ["ISIN_A", "ISIN_B"],
+                "rank": [1, 2],
+                "ff_mcap": [1000.0, 900.0],
+                "comment": [None, None],
+            }
+        )
+        entries_df.write_parquet(entries_partition / "data.parquet")
+
+        _write_membership_partition(
+            output_dir,
+            rd,
+            [
+                {"isin": "ISIN_A", "is_member": True, "entry_reason": "bootstrap"},
+                {"isin": "ISIN_B", "is_member": True, "entry_reason": "bootstrap"},
+            ],
+        )
+
+        # Write assets.parquet with ISIN->RIC mapping
+        assets_df = pl.DataFrame(
+            {
+                "isin": ["ISIN_A", "ISIN_B"],
+                "ric": ["RIC_A.DE", "RIC_B.FR"],
+                "internal_key": ["K1", "K2"],
+                "name": ["Co A", "Co B"],
+                "country": ["DE", "FR"],
+                "currency": ["EUR", "EUR"],
+            }
+        )
+        assets_df.write_parquet(output_dir / "assets.parquet")
+
+        with patch("stoxx.sync.date") as mock_date:
+            mock_date.today.return_value = date(2024, 3, 2)
+            mock_date.fromisoformat = date.fromisoformat
+            result = _build_ranking_table(output_dir)
+
+        assert "RIC_A.DE" in result.columns
+        assert "RIC_B.FR" in result.columns
+        row = result.filter(pl.col("date") == rd)
+        assert row["RIC_A.DE"][0] == 1
+        assert row["RIC_B.FR"][0] == 2
+
     @pytest.mark.asyncio
     async def test_ranking_written_during_sync(self, tmp_path):
         """Sync produces a ranking.parquet file in the output directory."""
