@@ -18,11 +18,13 @@ from stoxx.extract import (
 )
 from stoxx.storage import Storage
 from stoxx.sync import (
+    _build_isin_lookup,
     _build_merged_assets,
     _build_ranking_table,
     _compute_intervals,
     _download_prior_membership,
     _read_local_membership,
+    _validate_ranking_table,
     sync,
 )
 
@@ -311,7 +313,7 @@ class TestSync:
 
         parse_results = iter([(assets, entries1), (assets, entries2)])
 
-        def mock_parse(filepath):
+        def mock_parse(filepath, isin_lookup=None):
             return next(parse_results)
 
         compute_calls = []
@@ -826,3 +828,157 @@ class TestBuildRankingTable:
         ranking_df = pl.read_parquet(output_dir / "ranking.parquet")
         assert "date" in ranking_df.columns
         assert len(ranking_df) > 0
+
+
+class TestBuildIsinLookup:
+    """Tests for _build_isin_lookup helper."""
+
+    def test_builds_lookup_from_local_assets(self, tmp_path):
+        """Reads local assets.parquet and builds internal_key→isin dict."""
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+        df = pl.DataFrame(
+            {
+                "isin": ["CH0038863350", "NL0010273215", "DE0007164600"],
+                "internal_key": ["461669", "443333", "479831"],
+                "ric": ["NESN.VX", "ASML.AS", "SAP.DE"],
+                "name": ["NESTLE", "ASML", "SAP"],
+                "country": ["CH", "NL", "DE"],
+                "currency": ["CHF", "EUR", "EUR"],
+            }
+        )
+        df.write_parquet(output_dir / "assets.parquet")
+
+        storage = MemoryStorage()
+        result = _build_isin_lookup(storage, output_dir, tmp_path)
+
+        assert result == {
+            "461669": "CH0038863350",
+            "443333": "NL0010273215",
+            "479831": "DE0007164600",
+        }
+
+    def test_downloads_from_remote_when_local_missing(self, tmp_path):
+        """Falls back to downloading assets.parquet from R2."""
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+        storage = MemoryStorage()
+
+        df = pl.DataFrame(
+            {
+                "isin": ["CH0038863350"],
+                "internal_key": ["461669"],
+                "ric": ["NESN.VX"],
+                "name": ["NESTLE"],
+                "country": ["CH"],
+                "currency": ["CHF"],
+            }
+        )
+        import io
+
+        buf = io.BytesIO()
+        df.write_parquet(buf)
+        storage._objects["STOXX600/assets.parquet"] = buf.getvalue()
+
+        result = _build_isin_lookup(storage, output_dir, tmp_path)
+
+        assert result == {"461669": "CH0038863350"}
+
+    def test_returns_empty_dict_when_no_assets(self, tmp_path):
+        """Returns empty dict when no assets file exists locally or remotely."""
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+        storage = MemoryStorage()
+
+        result = _build_isin_lookup(storage, output_dir, tmp_path)
+
+        assert result == {}
+
+    def test_excludes_key_prefixed_isins(self, tmp_path):
+        """ISINs with KEY_ prefix (previous fallbacks) are excluded from lookup."""
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+        df = pl.DataFrame(
+            {
+                "isin": ["CH0038863350", "KEY_999999"],
+                "internal_key": ["461669", "999999"],
+                "ric": ["NESN.VX", "FAKE.XX"],
+                "name": ["NESTLE", "FAKE"],
+                "country": ["CH", "XX"],
+                "currency": ["CHF", "XXX"],
+            }
+        )
+        df.write_parquet(output_dir / "assets.parquet")
+
+        storage = MemoryStorage()
+        result = _build_isin_lookup(storage, output_dir, tmp_path)
+
+        assert "461669" in result
+        assert "999999" not in result
+
+
+class TestValidateRankingTable:
+    """Tests for _validate_ranking_table."""
+
+    def test_passes_when_ranks_1_to_100_present(self, tmp_path):
+        """No warning when review date row contains ranks 1-100."""
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+
+        rd = date(2024, 3, 1)
+        n_total = 700
+        n_members = 600
+
+        entries = [
+            {"isin": f"ISIN_{i}", "ric": f"RIC_{i}", "rank": i + 1, "ff_mcap": float(n_total - i)}
+            for i in range(n_total)
+        ]
+        membership = [
+            {"isin": f"ISIN_{i}", "is_member": i < n_members, "entry_reason": "bootstrap"} for i in range(n_total)
+        ]
+
+        _write_entries_partition(output_dir, rd, entries)
+        _write_membership_partition(output_dir, rd, membership)
+
+        with patch("stoxx.sync.date") as mock_date:
+            mock_date.today.return_value = date(2024, 3, 1)
+            mock_date.fromisoformat = date.fromisoformat
+            ranking_df = _build_ranking_table(output_dir)
+
+        # Should not raise or warn — ranks 1-600 are present
+        _validate_ranking_table(ranking_df, [rd])
+
+    def test_warns_when_only_one_rank(self, tmp_path):
+        """Logs warning when a review date has only a single ranked company."""
+        output_dir = tmp_path / "output"
+        output_dir.mkdir()
+
+        rd = date(2024, 3, 1)
+        _write_entries_partition(output_dir, rd, [{"isin": "ISIN_A", "ric": "RIC_A", "rank": 1, "ff_mcap": 1000.0}])
+        _write_membership_partition(
+            output_dir, rd, [{"isin": "ISIN_A", "is_member": True, "entry_reason": "bootstrap"}]
+        )
+
+        with patch("stoxx.sync.date") as mock_date:
+            mock_date.today.return_value = date(2024, 3, 1)
+            mock_date.fromisoformat = date.fromisoformat
+            ranking_df = _build_ranking_table(output_dir)
+
+        with patch("stoxx.sync.get_run_logger") as mock_logger_fn:
+            mock_log = mock_logger_fn.return_value
+            _validate_ranking_table(ranking_df, [rd])
+
+        mock_log.warning.assert_called()
+        warning_msg = mock_log.warning.call_args[0][0]
+        assert "FAILED" in warning_msg
+
+    def test_warns_on_empty_ranking(self):
+        """Logs warning when the ranking table is empty."""
+        ranking_df = pl.DataFrame({"date": []}).cast({"date": pl.Date})
+
+        with patch("stoxx.sync.get_run_logger") as mock_logger_fn:
+            mock_log = mock_logger_fn.return_value
+            _validate_ranking_table(ranking_df, [date(2024, 3, 1)])
+
+        mock_log.warning.assert_called_once()
+        assert "empty" in mock_log.warning.call_args[0][0].lower()

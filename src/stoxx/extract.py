@@ -57,6 +57,17 @@ class IndexMembership:
     entry_reason: EntryReason
 
 
+def _resolve_isin(raw_isin: str, internal_key: str, isin_lookup: dict[str, str] | None) -> str:
+    """Resolve an ISIN from a raw value, falling back to lookup or internal_key."""
+    if raw_isin and raw_isin.lower() not in ("", "null", "none"):
+        return raw_isin
+    if isin_lookup:
+        resolved = isin_lookup.get(internal_key)
+        if resolved:
+            return resolved
+    return f"KEY_{internal_key}"
+
+
 def _normalize_column_name(name: str) -> str:
     """Normalize column name to lowercase with underscores."""
     normalized = name.lower().strip()
@@ -65,11 +76,15 @@ def _normalize_column_name(name: str) -> str:
     return re.sub(r"_+", "_", normalized).strip("_")
 
 
-def parse_selection_list_csv(filepath: Path) -> tuple[list[Asset], list[SelectionListEntry]]:
+def parse_selection_list_csv(
+    filepath: Path,
+    isin_lookup: dict[str, str] | None = None,
+) -> tuple[list[Asset], list[SelectionListEntry]]:
     """Parse a STOXX selection list CSV into Assets and SelectionListEntries.
 
     Args:
         filepath: Path to a semicolon-delimited STOXX selection list CSV.
+        isin_lookup: Optional mapping of internal_key to ISIN for resolving missing ISINs.
 
     Returns:
         A tuple of (assets, entries) where assets has one per unique ISIN.
@@ -81,16 +96,21 @@ def parse_selection_list_csv(filepath: Path) -> tuple[list[Asset], list[Selectio
     creation_date_str = str(df["creation_date"][0])
     review_date = date(int(creation_date_str[:4]), int(creation_date_str[4:6]), int(creation_date_str[6:8]))
 
-    # Build assets: one per unique ISIN
-    asset_df = df.unique(subset=["isin"], keep="first")
+    # Build assets: one per unique identifier
+    # When ISINs may be missing, dedup on internal_key to avoid collapsing null ISINs
+    dedup_col = "internal_key" if isin_lookup else "isin"
+    asset_df = df.unique(subset=[dedup_col], keep="first")
     assets = []
     for row in asset_df.to_dicts():
         sedol_val = row.get("sedol")
         sedol = str(sedol_val).strip() if sedol_val is not None and str(sedol_val).strip() else None
+        internal_key = str(row["internal_key"]).strip()
+        raw_isin = str(row["isin"]).strip()
+        isin = _resolve_isin(raw_isin, internal_key, isin_lookup)
         assets.append(
             Asset(
-                isin=str(row["isin"]).strip(),
-                internal_key=str(row["internal_key"]).strip(),
+                isin=isin,
+                internal_key=internal_key,
                 ric=str(row["ric"]).strip(),
                 name=str(row["instrument_name"]).strip(),
                 country=str(row["country"]).strip(),
@@ -110,9 +130,13 @@ def parse_selection_list_csv(filepath: Path) -> tuple[list[Asset], list[Selectio
 
         ff_mcap_val = row.get("ff_mcap_meur")
         ff_mcap = float(ff_mcap_val) if ff_mcap_val is not None and str(ff_mcap_val).strip() != "" else None
+
+        internal_key = str(row["internal_key"]).strip()
+        raw_isin = str(row["isin"]).strip()
+        isin = _resolve_isin(raw_isin, internal_key, isin_lookup)
         entries.append(
             SelectionListEntry(
-                isin=str(row["isin"]).strip(),
+                isin=isin,
                 review_date=review_date,
                 ff_mcap=ff_mcap,
                 rank=rank,
@@ -217,11 +241,15 @@ def parse_selection_list_pdf(filepath: Path) -> tuple[list[Asset], list[Selectio
 
 
 @task
-def parse_selection_list(filepath: Path) -> tuple[list[Asset], list[SelectionListEntry]]:
+def parse_selection_list(
+    filepath: Path,
+    isin_lookup: dict[str, str] | None = None,
+) -> tuple[list[Asset], list[SelectionListEntry]]:
     """Parse a STOXX selection list file (CSV or PDF).
 
     Args:
         filepath: Path to a STOXX selection list file.
+        isin_lookup: Optional mapping of internal_key to ISIN for resolving missing ISINs.
 
     Returns:
         A tuple of (assets, entries) where assets has one per unique ISIN.
@@ -230,7 +258,7 @@ def parse_selection_list(filepath: Path) -> tuple[list[Asset], list[SelectionLis
     if file_type == "pdf":
         assets, entries = parse_selection_list_pdf(filepath)
     else:
-        assets, entries = parse_selection_list_csv(filepath)
+        assets, entries = parse_selection_list_csv(filepath, isin_lookup=isin_lookup)
     review_date = entries[0].review_date if entries else "unknown"
     logger.info(
         "Parsed %s file for %s: %d assets, %d entries", file_type.upper(), review_date, len(assets), len(entries)

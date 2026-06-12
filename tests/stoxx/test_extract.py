@@ -13,8 +13,10 @@ from stoxx.extract import (
     EntryReason,
     SelectionListEntry,
     _parse_pdf_date,
+    _resolve_isin,
     compute_membership,
     parse_selection_list,
+    parse_selection_list_csv,
     parse_selection_list_pdf,
 )
 
@@ -318,3 +320,88 @@ class TestParseSelectionList:
         )
         _assets, entries = parse_selection_list(Path("fake.pdf"))
         assert len(entries) == 4
+
+    def test_passes_isin_lookup_to_csv(self, csv_fixture_path):
+        """isin_lookup parameter is forwarded to CSV parser."""
+        _assets, entries = parse_selection_list(csv_fixture_path, isin_lookup={"FAKE": "RESOLVED"})
+        assert len(entries) == 1862
+
+
+class TestResolveIsin:
+    """Tests for ISIN resolution from lookup and fallback."""
+
+    def test_valid_isin_returned_as_is(self):
+        """A valid ISIN is returned unchanged regardless of lookup."""
+        assert _resolve_isin("CH0038863350", "461669", {"461669": "OTHER"}) == "CH0038863350"
+
+    def test_empty_isin_resolved_from_lookup(self):
+        """Empty ISIN is resolved via lookup dict."""
+        assert _resolve_isin("", "461669", {"461669": "CH0038863350"}) == "CH0038863350"
+
+    def test_null_isin_resolved_from_lookup(self):
+        """Null-string ISIN is resolved via lookup dict."""
+        assert _resolve_isin("null", "461669", {"461669": "CH0038863350"}) == "CH0038863350"
+
+    def test_none_string_isin_resolved_from_lookup(self):
+        """None-string ISIN is resolved via lookup dict."""
+        assert _resolve_isin("None", "461669", {"461669": "CH0038863350"}) == "CH0038863350"
+
+    def test_fallback_to_internal_key(self):
+        """When lookup has no entry, falls back to KEY_ prefix."""
+        assert _resolve_isin("", "461669", {"OTHER": "XX"}) == "KEY_461669"
+
+    def test_fallback_without_lookup(self):
+        """When no lookup provided, falls back to KEY_ prefix."""
+        assert _resolve_isin("", "461669", None) == "KEY_461669"
+
+    def test_empty_lookup_falls_back(self):
+        """Empty lookup dict falls back to KEY_ prefix."""
+        assert _resolve_isin("", "461669", {}) == "KEY_461669"
+
+
+class TestParseSelectionListCsvWithLookup:
+    """Tests for parse_selection_list_csv with isin_lookup parameter."""
+
+    def test_resolves_missing_isins_from_lookup(self, tmp_path):
+        """CSV rows with empty ISINs are resolved via isin_lookup."""
+        csv_content = (
+            "Internal_Key;ISIN;RIC;Instrument_Name;Country;Currency;Sedol;"
+            "FF_Mcap_MEUR;Rank_Final;Comment;Creation_Date\n"
+            "100001;;RIC1.DE;Company A;DE;EUR;SEDOL1;50000.0;1;;20260601\n"
+            "100002;;RIC2.FR;Company B;FR;EUR;SEDOL2;40000.0;2;;20260601\n"
+            "100003;;RIC3.GB;Company C;GB;GBP;SEDOL3;30000.0;3;;20260601\n"
+        )
+        csv_path = tmp_path / "test.csv"
+        csv_path.write_text(csv_content)
+
+        lookup = {"100001": "DE000AAAA111", "100002": "FR000BBBB222"}
+        assets, entries = parse_selection_list_csv(csv_path, isin_lookup=lookup)
+
+        assert len(assets) == 3
+        assert len(entries) == 3
+
+        asset_map = {a.internal_key: a for a in assets}
+        assert asset_map["100001"].isin == "DE000AAAA111"
+        assert asset_map["100002"].isin == "FR000BBBB222"
+        assert asset_map["100003"].isin == "KEY_100003"
+
+        entry_isins = {e.isin for e in entries}
+        assert "DE000AAAA111" in entry_isins
+        assert "FR000BBBB222" in entry_isins
+        assert "KEY_100003" in entry_isins
+
+    def test_existing_isins_not_overwritten(self, tmp_path):
+        """CSV rows with valid ISINs are not overwritten by lookup."""
+        csv_content = (
+            "Internal_Key;ISIN;RIC;Instrument_Name;Country;Currency;Sedol;"
+            "FF_Mcap_MEUR;Rank_Final;Comment;Creation_Date\n"
+            "100001;ORIGINAL_ISIN;RIC1.DE;Company A;DE;EUR;;50000.0;1;;20260601\n"
+        )
+        csv_path = tmp_path / "test.csv"
+        csv_path.write_text(csv_content)
+
+        lookup = {"100001": "LOOKUP_ISIN"}
+        assets, entries = parse_selection_list_csv(csv_path, isin_lookup=lookup)
+
+        assert assets[0].isin == "ORIGINAL_ISIN"
+        assert entries[0].isin == "ORIGINAL_ISIN"
